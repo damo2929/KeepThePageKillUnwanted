@@ -834,6 +834,24 @@ Built with Claude (Anthropic). None of these SDKs publish how they work, so
 every fix here started from reading obfuscated inline scripts and watching
 what the page did to itself.
 
+Verified with [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp),
+Google's Chrome DevTools MCP server, configured at project scope in
+`.mcp.json`. It is what makes a claim here checkable rather than asserted: it
+loads the built package into a real Chrome, and then reports what that Chrome
+actually did -- which rulesets are enabled, whether the content scripts ran,
+what the console said, what the page looked like at the foot of a scroll.
+That matters more here than in most projects, because an extension with
+nothing to do looks exactly like one that worked, and this repository has a
+log of fixes that were reported as working on the strength of a clean page
+alone.
+
+Two things it still cannot reach, and they are named in every report rather
+than glossed: `chrome://` pages are closed to it, so the install-warnings box
+and the unpacked reload stay manual; and a browser it launches with a fresh
+profile gets challenged by bot detection on article pages, which has to be
+distinguished from the extension breaking them -- uninstall, reload, and see
+if the challenge persists.
+
 `AGENTS.md` is the honest record of that: the hard-won rules, and a log of the
 approaches that made things *worse* before the one that worked. Guarding
 `setAttribute` raised the very dialog it was meant to remove. Answering
