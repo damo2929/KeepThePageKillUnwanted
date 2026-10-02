@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/reinject-rules.py\"",
+            "timeout": 10,
+            "statusMessage": "Loading repo rules"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/reinject-rules.py\"",
+            "timeout": 10,
+            "statusMessage": "Restoring repo rules after compact"
+          }
+        ]
+      }
+    ]
+  }
+}

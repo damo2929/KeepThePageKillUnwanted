@@ -1,0 +1,8 @@
+*.bak
+*.tmp
+.DS_Store
+_metadata/
+*.pem
+*.crx
+dist/
+__pycache__/
