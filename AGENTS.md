@@ -104,7 +104,7 @@ Every decision about *whether something is present* — a wall, a CMP, a share
 row, a comment section, a newsletter popup, a sign-in button, a consent-gated
 embed — is made from what the page itself carries, never from the hostname:
 
-    SDK loader attributes            data-sdk="l/<n>.<n>", the loader host, nowprocket
+    SDK loader attributes            data-sdk="l/<n>.<n>" / "e/<n>.<n>", the loader host, nowprocket
     vendor class names / container ids   #qc-cmp2-container, .cky-btn-customize,
                                      #cmp-banner-sdk, #onetrust-consent-sdk
     cookie and storage key names     CONSENT_NAME, anchored ^...$
@@ -181,7 +181,7 @@ this repo**; those belong in the exception lists, which are theirs.
 | scotsman, yorkshirepost | AdShield `l/1.1.21` | **Fixed** — covered by signature, no list entry |
 | listentotaxman.com | AdShield `l/1.1.10` recovery script -> native `confirm()` | **Fixed** — `loader-check` gate pinned by signature |
 | lesoleil.com, lenouvelliste.ca | CookieYes, no reject button | Refused via preference centre, by class signature — see CookieYes section |
-| phoronix.com | Freestar nag, fixed overlay z=999999 | **Fixed** — `WALL_TEXT` inflection, see below |
+| phoronix.com | Freestar nag, fixed overlay z=999999; AdShield `e/1.0.8` inline bootstrap | **Fixed** — `WALL_TEXT` inflection; `e/` loader refused at insertion, see below |
 | theverge.com | PMC "duet" privacy notice, no refusal in page | **Removed** by class (`.duet--navigation--pmc-privacy-banner`), never closed. The Zephr subscription gate (`isAccessibleForFree: false`) is **deliberately not touched** — a paywall, like thetimes.com |
 
 Full evidence for all of these is in `sweep-results.md` (52 articles, 26
@@ -233,12 +233,43 @@ so headless is not a way to verify this site. A `curl` of the served HTML works
 and a headed browser works; anything claimed about this site has to come from
 one of those.
 
-**The served HTML tells you almost nothing here.** No `data-sdk`, no
-`html-load.com`, no `nowprocket`, no plaintext `adblock` anywhere. The wall is
-an 8,259-character hex-array-obfuscated inline script carrying no plaintext API
-names at all — no `eval`, `setTimeout`, `createElement`, `atob`. It is
-byte-identical across pages (blob SHA `e9bbe8c8a850`), so it *would* serve as a
-signature, but it was never needed: the rendered text was enough.
+**The served HTML hides its loader.** No `data-sdk`, no `html-load.com`, no
+`nowprocket`, no plaintext `adblock` anywhere. What it does carry is an
+8,259-character obfuscated inline script (`data-cfasync="false"`, an RC4 string
+table, no plaintext API names), byte-identical across pages. Decoded by running
+its own string decoder, it is **AdShield's `e/` bootstrap**, and it has no gate:
+
+    window['__sa_' + btoa(location.href)] = { HTMLIFrameElement_contentWindow: <native descriptor> }
+    m = document.currentScript.dataset.domain ?? 'html-load.cc'
+    document.currentScript.remove()
+    <script src="https://<m>/script/<btoa(hostname)>.js" data-sdk="e/1.0.8">
+      onerror -> cdn.jsdelivr.net/gh/ad-shield/e, cdn.statically.io gh/gl/bb,
+                 rawcdn/bbcdn.githack.com -- one by one, each on the last's error
+      all failed -> new WebSocket('wss://html-load.cc/ws'), send 'essential',
+                    every message becomes a new inline <script>
+    document.head.appendChild(L)
+
+Observed in Chrome: `html-load.cc` failed (blocked), the jsdelivr mirror ran
+(179KB, itself obfuscated), and it injected a second stage, `data-sdk="e/1.0.13"`,
+from a rotated domain. The shell's resolver and Chrome's disagree here -- the
+shell cannot resolve either loader host, so `curl` cannot fetch the stages; read
+them through the browser's resource timing instead.
+
+**Disarmed by refusing the first insertion** (`walls.js` section 0b). Every
+later stage hangs off the previous tag's `error` event, so a `<script>` whose
+`data-sdk` matches the `e/<n>.<n>` shape is handed back from `appendChild` /
+`insertBefore` without being inserted: no fetch, no error, no mirror, no socket,
+no second stage. By the tag's own signature -- the loader host comes from
+`data-domain` and rotates, so a host match would be a URL list. The bootstrap
+does not read its write back, so the refusal is silent. The `l/` line is not
+touched by this; it keeps the `loader-check` pin in section 0.
+
+Verified on two random free articles (Proton 11.0-2e, Ubuntu 26.10 RISC-V):
+bootstrap ran (`__sa_` global present), zero `script[data-sdk]`, zero requests
+to the loader host, mirrors or second stage, 7 stylesheets, text renders to the
+foot. Freestar ads still load -- this is not an ad blocker. Not established:
+whether the "ad blocker is on" modal was AdShield's; it showed on neither
+article before or after.
 
 ## Consent-or-pay walls
 

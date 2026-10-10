@@ -32,6 +32,7 @@
  *     needed no change here — verified by probe, not by reading the regex:
  *     appending a div to <body> and calling remove() is refused when armed.
  *   html-load.com | content-loader.com | error-report.com   loader hosts
+ *   data-sdk="e/1.0.8" / "e/1.0.13"   AdShield `e/` line, refused at insertion
  *   "Ads help keep <site> content free"    News Corp wall copy
  *   "please disable the ad blocker"        generic wall instruction
  *
@@ -129,6 +130,7 @@
 
   const SDK_ATTR = /(^|-)l\/\d+\.\d+/;
   const SDK_HOST = /(html-load|content-loader|error-report)\.com/i;
+  const SDK_E_ATTR = /(^|-)e\/\d+\.\d+/;        // AdShield's `e/` line, section 0b
 
   const WALL_TEXT = new RegExp([
     'ads?\\s+help\\s+keep',                    // "Ads help keep Page Six content free"
@@ -191,6 +193,52 @@
     }
     log('walls', 'pinned the loader-check gate — recovery script will stand down');
   };
+
+  /* ---------- 0b. the `e/` bootstrap's loader is never inserted -----------
+   * Found on phoronix.com: an 8,259-byte obfuscated inline script, the same
+   * bytes on every page. Decoded, it has no gate at all:
+   *
+   *     window['__sa_' + btoa(location.href)] = { <native contentWindow descriptor> }
+   *     L = <script src="https://<loader host>/script/<btoa(hostname)>.js" data-sdk="e/1.0.8">
+   *     L.onerror -> six ad-shield/e mirrors (jsdelivr, statically, githack), one by one
+   *     last one fails -> new WebSocket('wss://<loader host>/ws'), send 'essential',
+   *                       every message becomes a new inline <script>
+   *     document.head.appendChild(L)
+   *
+   * With the loader host blocked it fell through to the jsdelivr mirror (179KB),
+   * which then injected a second stage, data-sdk="e/1.0.13", from a rotated
+   * domain. The WebSocket end of the chain runs whatever text the server sends.
+   *
+   * Every step after the first is driven by the previous tag's `error` event.
+   * So refusing the first insertion stops all of it: no fetch, so no error, so
+   * no mirror, no socket, no second stage. The refused node is handed back as
+   * if inserted, the same as native, and nothing is thrown. The bootstrap does
+   * not read its own write back.
+   *
+   * By the tag's own signature, the `e/<n>.<n>` shape, never a host: the loader
+   * host is read from the bootstrap's data-domain and defaults to one that
+   * rotates. Only a SCRIPT carrying it is refused; every other node passes
+   * straight through. */
+  const isELoader = (n) => {
+    if (!n || n.nodeType !== 1 || n.tagName !== 'SCRIPT') return false;
+    const sdk = n.getAttribute('data-sdk');
+    return !!(sdk && SDK_E_ATTR.test(sdk));
+  };
+
+  const refuseELoader = (name) => {
+    const native = Node.prototype[name];
+    if (typeof native !== 'function') return;
+    Node.prototype[name] = function (node) {
+      if (active('walls') && isELoader(node)) {
+        log('walls', 'refused AdShield loader ' + node.getAttribute('data-sdk') + ' (' + name + ')');
+        return node;
+      }
+      return native.apply(this, arguments);
+    };
+  };
+
+  refuseELoader('appendChild');
+  refuseELoader('insertBefore');
 
   let armed = false;
   let lastProbe = 0;

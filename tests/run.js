@@ -70,6 +70,8 @@ function makeSandbox() {
   Element.prototype.remove = function () { this.__removed = true; };
   function Node() {}
   Node.prototype.removeChild = function (c) { c.__removed = true; return c; };
+  Node.prototype.appendChild = function (c) { (this.inserted = this.inserted || []).push(c); return c; };
+  Node.prototype.insertBefore = function (c) { (this.inserted = this.inserted || []).push(c); return c; };
 
   /* A real accessor pair, so the cookie guard installs over it. */
   function Document() {}
@@ -587,6 +589,58 @@ test('the gate is not pinned with anti-adblock switched off', () => {
   load(file('walls.js'), s);
   parse(s, loaderTag(s, { 'data-sdk': 'l/1.1.10' }));
   eq(sdkGate(s.window), false, 'gate pinned although walls is off');
+});
+
+print('\nwalls.js — AdShield e/ loader refused at insertion');
+
+/* The phoronix bootstrap builds this tag and calls document.head.appendChild.
+ * Every later stage hangs off its `error` event, so a refused insertion is the
+ * whole fix: nothing fetched, nothing fails, no mirror, no WebSocket. */
+const insertInto = (s, method, el) => {
+  const head = Object.create(s.Node.prototype);
+  const back = s.Node.prototype[method].call(head, el, null);
+  return { head, back };
+};
+
+test('a script carrying data-sdk e/<n>.<n> is never inserted', () => {
+  for (const method of ['appendChild', 'insertBefore']) {
+    for (const v of ['e/1.0.8', 'e/1.0.13', 'e/2.1', 'wp-e/1.0.8']) {
+      const s = load(file('walls.js'), makeSandbox());
+      const el = loaderTag(s, { 'data-sdk': v, src: 'https://loader.invalid/script/d3d3.js' });
+      el.nodeType = 1;
+      const { head, back } = insertInto(s, method, el);
+      eq((head.inserted || []).length, 0, v + ' inserted via ' + method);
+      eq(back, el, method + ' did not hand the node back');
+    }
+  }
+});
+
+test('everything else is inserted untouched', () => {
+  const s = load(file('walls.js'), makeSandbox());
+  const cases = [
+    loaderTag(s, { src: 'https://a.pub.network/site/pubfig.min.js' }),
+    loaderTag(s, { 'data-sdk': 'l/1.1.21' }),      /* the l/ line keeps its gate, section 0 */
+    loaderTag(s, { 'data-sdk': 'gtm' }),
+    loaderTag(s, { 'data-sdk': 'e/1' }),
+    loaderTag(s, { 'data-sdk': 'core/1.0' }),
+    s.document.createElement('div')
+  ];
+  const div = cases[cases.length - 1];
+  div.setAttribute('data-sdk', 'e/1.0.8');        /* the signature only counts on a SCRIPT */
+  for (const el of cases) {
+    el.nodeType = 1;
+    const { head } = insertInto(s, 'appendChild', el);
+    eq((head.inserted || []).length, 1, (el.getAttribute('data-sdk') || el.src || el.localName) + ' refused');
+  }
+});
+
+test('the e/ loader is inserted with anti-adblock switched off', () => {
+  const s = makeSandbox();
+  s.html.setAttribute('data-ktp-off', 'walls');
+  load(file('walls.js'), s);
+  const el = loaderTag(s, { 'data-sdk': 'e/1.0.8' });
+  el.nodeType = 1;
+  eq((insertInto(s, 'appendChild', el).head.inserted || []).length, 1, 'refused although walls is off');
 });
 
 print('\nsocial.js — host matching and what must survive');
