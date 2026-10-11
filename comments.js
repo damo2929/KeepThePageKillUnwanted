@@ -293,14 +293,14 @@
    * waiting for storage would let the section paint first. */
   install();
   try {
-    chrome.storage.local.get([KEY, EXCEPT, TRACE], (got) => {
+    chrome.storage.sync.get([KEY, EXCEPT, TRACE], (got) => {
       widgets = (got && got[KEY]) || {};
       except = (got && got[EXCEPT]) || [];
       tracing = traceOn(got && got[TRACE]);
       apply();
     });
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local' || !(changes[KEY] || changes[EXCEPT] || changes[TRACE])) return;
+      if (area !== 'sync' || !(changes[KEY] || changes[EXCEPT] || changes[TRACE])) return;
       if (changes[KEY]) widgets = changes[KEY].newValue || {};
       if (changes[EXCEPT]) except = changes[EXCEPT].newValue || [];
       if (changes[TRACE]) tracing = traceOn(changes[TRACE].newValue);

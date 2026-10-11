@@ -684,7 +684,7 @@
   };
 
   try {
-    chrome.storage.local.get([KEY, EXCEPT, TRACE], (got) => {
+    chrome.storage.sync.get([KEY, EXCEPT, TRACE], (got) => {
       applySettings(got && got[KEY]);
       except = (got && got[EXCEPT]) || [];
       tracing = traceOn(got && got[TRACE]);
@@ -695,7 +695,7 @@
     /* Settings changes apply to the next sweep. What has already been removed
      * stays removed until the page is reloaded -- the options page says so. */
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local' || !(changes[KEY] || changes[EXCEPT] || changes[TRACE])) return;
+      if (area !== 'sync' || !(changes[KEY] || changes[EXCEPT] || changes[TRACE])) return;
       if (changes[KEY]) applySettings(changes[KEY].newValue);
       if (changes[EXCEPT]) except = changes[EXCEPT].newValue || [];
       if (changes[TRACE]) tracing = traceOn(changes[TRACE].newValue);

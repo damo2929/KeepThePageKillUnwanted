@@ -273,14 +273,14 @@
   };
 
   try {
-    chrome.storage.local.get(KEY, (got) => {
+    chrome.storage.sync.get(KEY, (got) => {
       cfg = Object.assign({}, DEFAULTS, (got && got[KEY]) || {});
       publish();
       log('settings loaded:', JSON.stringify(cfg));
       start();
     });
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local' || !changes[KEY]) return;
+      if (area !== 'sync' || !changes[KEY]) return;
       cfg = Object.assign({}, DEFAULTS, changes[KEY].newValue || {});
       publish();
       styleFeed();

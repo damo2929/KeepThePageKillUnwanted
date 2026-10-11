@@ -1,13 +1,16 @@
 /*
  * Keep The Page — options page.
  *
- * Settings live in chrome.storage.local under one key:
+ * Settings live in chrome.storage.sync, so they follow the Chrome profile to
+ * every machine signed into it. The tracing key is
  *
  *     trace: { enabled: <bool>, channels: [<string>, ...] }
  *
  * bridge.js reads it and publishes the enabled channels to the MAIN world.
  * Saving is immediate — there is no Save button, and no state that only exists
- * in this page.
+ * in this page. The one exception is `errors`, which stays in
+ * chrome.storage.local: it is this machine's log, written on every failure,
+ * and would run into sync's write-rate limit.
  */
 (() => {
   'use strict';
@@ -22,9 +25,18 @@
   const about = document.getElementById('about');
 
   let savedTimer = null;
+  /* Also the callback for every sync write, so a refused one (sync allows
+   * 8 KB per key, which a long exception list can reach) says so instead of
+   * flashing "Saved". */
   const flashSaved = () => {
-    saved.classList.add('on');
     clearTimeout(savedTimer);
+    if (chrome.runtime.lastError) {
+      saved.textContent = 'Could not save: ' + chrome.runtime.lastError.message;
+      saved.classList.add('on');
+      return;
+    }
+    saved.textContent = 'Saved';
+    saved.classList.add('on');
     savedTimer = setTimeout(() => saved.classList.remove('on'), 900);
   };
 
@@ -41,7 +53,7 @@
 
   const save = () => {
     paintDisabled();
-    chrome.storage.local.set({ [KEY]: read() }, () => {
+    chrome.storage.sync.set({ [KEY]: read() }, () => {
       if (chrome.runtime.lastError) {
         saved.textContent = 'Could not save: ' + chrome.runtime.lastError.message;
         saved.classList.add('on');
@@ -52,7 +64,7 @@
     });
   };
 
-  chrome.storage.local.get(KEY, (got) => {
+  chrome.storage.sync.get(KEY, (got) => {
     const t = (got && got[KEY]) || DEFAULTS;
     enabled.checked = !!t.enabled;
     const on = Array.isArray(t.channels) ? t.channels : [];
@@ -71,7 +83,7 @@
   const PROTECT = 'protect';
   const defs = [...document.querySelectorAll('.def')];
 
-  chrome.storage.local.get(PROTECT, (got) => {
+  chrome.storage.sync.get(PROTECT, (got) => {
     const p = (got && got[PROTECT]) || {};
     defs.forEach((d) => { d.checked = p[d.value] !== false; });
   });
@@ -79,7 +91,7 @@
   defs.forEach((d) => d.addEventListener('change', () => {
     const p = {};
     defs.forEach((x) => { p[x.value] = x.checked; });
-    chrome.storage.local.set({ [PROTECT]: p }, flashSaved);
+    chrome.storage.sync.set({ [PROTECT]: p }, flashSaved);
   }));
 
   /* ---------- social furniture ------------------------------------------ */
@@ -116,7 +128,7 @@
     const platforms = {};
     plats.forEach((p) => { platforms[p.value] = p.checked; });
     const mode = (modes.find((m) => m.checked) || {}).value || 'remove';
-    chrome.storage.local.set({
+    chrome.storage.sync.set({
       [SOCIAL]: {
         enabled: social.checked,
         mode,
@@ -128,7 +140,7 @@
     paintSocial();
   };
 
-  chrome.storage.local.get(SOCIAL, (got) => {
+  chrome.storage.sync.get(SOCIAL, (got) => {
     const v = Object.assign({}, SOCIAL_DEFAULTS, (got && got[SOCIAL]) || {});
     const on = Object.assign({}, SOCIAL_DEFAULTS.platforms, v.platforms || {});
     social.checked = v.enabled !== false;
@@ -152,7 +164,7 @@
   const portalTabs = document.getElementById('portalTabs');
   const portalFeed = document.getElementById('portalFeed');
 
-  chrome.storage.local.get(MSN, (got) => {
+  chrome.storage.sync.get(MSN, (got) => {
     const v = Object.assign({}, MSN_DEFAULTS, (got && got[MSN]) || {});
     portalComments.checked = v.comments !== false;
     portalCards.checked = v.cards !== false;
@@ -161,7 +173,7 @@
   });
 
   [portalComments, portalCards, portalTabs, portalFeed].forEach((el) => el.addEventListener('change', () => {
-    chrome.storage.local.set({
+    chrome.storage.sync.set({
       [MSN]: {
         comments: portalComments.checked,
         cards: portalCards.checked,
@@ -242,7 +254,7 @@
 
   const hideNewsletter = document.getElementById('hideNewsletter');
 
-  chrome.storage.local.get(WIDGETS, (got) => {
+  chrome.storage.sync.get(WIDGETS, (got) => {
     const w = (got && got[WIDGETS]) || {};
     const on = w.comments !== false;
     hideComments.checked = on;
@@ -252,7 +264,7 @@
 
   /* Both keys written together: storing one alone would drop the other, and
    * the content scripts read a missing key as on. */
-  const saveWidgets = () => chrome.storage.local.set({
+  const saveWidgets = () => chrome.storage.sync.set({
     [WIDGETS]: { comments: hideComments.checked, newsletter: hideNewsletter.checked }
   }, flashSaved);
 
@@ -268,11 +280,11 @@
     const box = document.getElementById(id);
     if (!box) return;
     const list = () => box.value.split('\n').map((s) => s.trim()).filter(Boolean);
-    chrome.storage.local.get(key, (got) => {
+    chrome.storage.sync.get(key, (got) => {
       const l = got && got[key];
       box.value = (Array.isArray(l) ? l : []).join('\n');
     });
-    const save = () => chrome.storage.local.set({ [key]: list() }, flashSaved);
+    const save = () => chrome.storage.sync.set({ [key]: list() }, flashSaved);
     let timer = 0;
     box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(save, 500); });
     box.addEventListener('change', () => { clearTimeout(timer); save(); });
@@ -280,6 +292,32 @@
   bindExceptions('commentsExcept', 'commentExceptions');
   bindExceptions('socialExcept', 'socialExceptions');
   bindExceptions('newsletterExcept', 'newsletterExceptions');
+
+  /* ---------- reset to defaults -----------------------------------------
+   * Removing a key IS the default: every reader treats a missing key as
+   * "everything on, no exceptions". Local is cleared too, or a copy the
+   * migration in background.js has not moved yet would be carried back into
+   * sync at the next start. `errors` is a log, not a setting, and stays.
+   * Two clicks rather than confirm(): the first arms it for a few seconds. */
+  const RESET = [KEY, PROTECT, SOCIAL, MSN, WIDGETS,
+                 'commentExceptions', 'socialExceptions', 'newsletterExceptions'];
+  const reset = document.getElementById('reset');
+  let armed = 0;
+  reset.addEventListener('click', () => {
+    if (!armed) {
+      reset.textContent = 'Click again to reset everywhere';
+      armed = setTimeout(() => { armed = 0; reset.textContent = 'Reset all settings'; }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    armed = 0;
+    chrome.storage.local.remove(RESET, () => {
+      chrome.storage.sync.remove(RESET, () => {
+        if (chrome.runtime.lastError) { flashSaved(); return; }
+        location.reload();
+      });
+    });
+  });
 
   /* Build identity, read from the manifest so this page and the manifest can
    * never disagree. The author is deliberately NOT printed: a settings panel

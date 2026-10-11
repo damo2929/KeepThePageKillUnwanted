@@ -110,14 +110,14 @@
   else document.addEventListener('readystatechange', start, { once: true });
 
   try {
-    chrome.storage.local.get([KEY, EXCEPT], (got) => {
+    chrome.storage.sync.get([KEY, EXCEPT], (got) => {
       widgets = (got && got[KEY]) || {};
       except = (got && got[EXCEPT]) || [];
       ready = true;
       sweep();
     });
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local' || !(changes[KEY] || changes[EXCEPT])) return;
+      if (area !== 'sync' || !(changes[KEY] || changes[EXCEPT])) return;
       if (changes[KEY]) widgets = changes[KEY].newValue || {};
       if (changes[EXCEPT]) except = changes[EXCEPT].newValue || [];
       sweep();

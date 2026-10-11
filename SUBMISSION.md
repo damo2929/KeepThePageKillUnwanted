@@ -85,7 +85,8 @@ Every feature can be switched off, and comments, social furniture and
 newsletter removal each take a list of sites to leave alone.
 
 It collects nothing. It sends nothing. There is no account, no analytics and
-no server — the only storage is your own settings, on your own machine. The
+no server — the only storage is your own settings, which Chrome syncs to your
+other machines if you use Chrome sync. The
 source is public and unminified: github.com/damo2929/KeepThePageKillUnwanted
 ```
 
@@ -124,8 +125,10 @@ each one can be switched off individually.
 
   ```
   Stores the user's own settings — which protections are on, which social
-  platforms to neutralise, and the per-feature lists of sites to leave alone.
-  chrome.storage.local only; nothing is synced or transmitted.
+  platforms to neutralise, and the per-feature lists of sites to leave alone —
+  in chrome.storage.sync, so they follow the user's Chrome profile, plus a
+  local log of the extension's own errors in chrome.storage.local. The
+  extension itself transmits nothing.
   ```
 
 - `declarativeNetRequest`
@@ -154,7 +157,11 @@ each one can be switched off individually.
   global prototypes and must not run anywhere it is not needed.
 
 **Data use** — tick nothing. The extension collects none of the listed
-categories. Then certify all three statements: not being sold to third
+categories. Settings are in `chrome.storage.sync`, which Chrome Sync carries
+between the user's own devices; the developer never receives them. Treating
+that as not collected is our reading of the user-data FAQ, and has not been
+checked against current policy text. If review disagrees, the lists of sites
+the user typed would come under "Website content" or "Web history". Then certify all three statements: not being sold to third
 parties, not used or transferred for any purpose unrelated to the single
 purpose, not used or transferred to determine creditworthiness or for lending.
 

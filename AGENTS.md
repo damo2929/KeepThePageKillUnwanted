@@ -586,7 +586,7 @@ makes bridge.js set `data-ktp-trace` on `<html>`, which a hostile SDK could in
 principle read. That is an acceptable trade while debugging and not otherwise,
 which is why the default is off rather than "quiet".
 
-    chrome.storage.local -> { trace: { enabled: bool, channels: [...] } }
+    chrome.storage.sync  -> { trace: { enabled: bool, channels: [...] } }
                          -> bridge.js (ISOLATED)
                          -> <html data-ktp-trace="walls,timers">
                          -> walls.js / guard.js traced(channel)
@@ -599,7 +599,7 @@ newsletter.js run in the ISOLATED world and are already reading two storage
 keys each, so they read `trace` from storage directly and never look at the
 attribute:
 
-    chrome.storage.local -> { trace: { enabled: bool, channels: [...] } }
+    chrome.storage.sync  -> { trace: { enabled: bool, channels: [...] } }
                          -> comments.js / social.js / newsletter.js (ISOLATED)
                          -> log() on channel `widgets`
 
@@ -641,7 +641,7 @@ hot path.
 Every defence can be switched off from the options page. The plumbing mirrors
 tracing, with one deliberate inversion:
 
-    chrome.storage.local -> { protect: { walls, timers, consent, cookies, dom } }
+    chrome.storage.sync  -> { protect: { walls, timers, consent, cookies, dom } }
                          -> bridge.js publishes only the ones set FALSE
                          -> <html data-ktp-off="cookies,dom">
                          -> walls.js active(name)
@@ -932,7 +932,7 @@ cannot name either way.
 **A removal must not run before storage answers.** comments.js hides and can
 un-hide, so it installs its stylesheet immediately and reverses it if the page
 turns out to be excepted. clutter.js removes, which is not reversible, so
-`commentsOn()` is false until `chrome.storage.local.get` returns — and stays
+`commentsOn()` is false until `chrome.storage.sync.get` returns — and stays
 false if storage is unreachable. For an irreversible action the safe direction
 is to leave the page alone, which is the opposite of the `active()` default in
 walls.js and is deliberate.
@@ -1295,6 +1295,19 @@ or a marked link inside a component stays visible.
   form (uBlock Origin ships the same shape), so it is a string, not an object.
 - **Settings**: extension pages (`options.html`) may use `chrome.*` freely;
   content scripts in the MAIN world may not. Keep that line clear.
+- **Settings live in `chrome.storage.sync`**, at the user's direction, so they
+  follow the Chrome profile; every reader listens for `area === 'sync'`. The
+  one exception is `errors`, which stays in `chrome.storage.local`: it is
+  per-machine, and written on every failure, which would hit sync's write
+  limit (120 a minute). `background.js` migrates older builds' local settings
+  on install, update and start: copy what sync lacks, never overwrite sync,
+  remove the local copy only after sync accepted it. It also re-applies the
+  Disqus ruleset from `widgets.comments`, so a synced change reaches the DNR
+  block. Settings → **Reset all settings** removes the same keys from sync and
+  local; a test pins the reset list, the migration list and the keys the
+  page saves to one set. Sync caps a key at 8 KB, and `flashSaved` shows
+  "Could not save" when a write is refused. `PRIVACY.md` and `SUBMISSION.md`
+  describe this; change them with it.
 - **Syntax check**: there is no node on this box. Use
   `gjs -c '... new Function(src) ...'` to parse-check before asking for a reload.
 

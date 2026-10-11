@@ -108,8 +108,8 @@ change.
 
 Click the toolbar icon, or Details → Extension options. There's no Save
 button. Changes save as you make them and a "Saved" marker flashes up.
-Settings live in `chrome.storage.local`, so they stay in this browser profile
-and don't sync.
+Settings live in `chrome.storage.sync`, so they follow your Chrome profile to
+every machine signed into it. Only the error log stays on this machine.
 
 The page, top to bottom:
 
@@ -122,38 +122,56 @@ The page, top to bottom:
 | **Newsletter sign-ups** | Email sign-up popups and in-article boxes, and your URL exceptions | On, no exceptions |
 | **MSN and Bing feeds** | Comments, information cards, section tabs and the feed, on msn.com and bing.com only | All on |
 | **Errors** | Failures the guards swallowed, newest first, repeats counted, with Clear | Empty |
+| **Reset** | Puts every setting back to default and empties the exception lists, on every synced machine. Leaves the error log alone. Click twice | — |
 
 The footer shows the running version, read from the manifest. After a reload,
 check it against `version_name` and you know Chrome is running what's on disk.
 
 ### Where your settings are kept, and how to clear them
 
-Everything the settings page saves goes into `chrome.storage.local`, Chrome's
-own storage for this extension. Nowt is sent anywhere, nothing syncs to your
-Google account, and nothing is written into the sites you visit.
+Everything the settings page saves goes into `chrome.storage.sync`, Chrome's
+synced storage for this extension. If you're signed into Chrome with sync on,
+your settings and exception lists travel with your Google account to your
+other machines, the same way Chrome syncs your bookmarks. If you're not
+signed in, or sync is off, it behaves like local storage and stays put. The
+extension itself still sends nowt anywhere, and nothing is written into the
+sites you visit.
 
-| Key | What it holds |
-|---|---|
-| `protect` | Protections you've switched off |
-| `trace` | Tracing on/off and the channels picked |
-| `social` | Social furniture switches, mode and exceptions |
-| `socialExceptions` | Your Social furniture URL exceptions |
-| `widgets` | The Comments and Newsletter switches |
-| `commentExceptions` | Your Comments URL exceptions |
-| `newsletterExceptions` | Your Newsletter URL exceptions |
-| `portal` | The MSN and Bing switches |
-| `errors` | The error log, last 50 |
+| Key | Where | What it holds |
+|---|---|---|
+| `protect` | sync | Protections you've switched off |
+| `trace` | sync | Tracing on/off and the channels picked |
+| `social` | sync | Social furniture switches, mode and exceptions |
+| `socialExceptions` | sync | Your Social furniture URL exceptions |
+| `widgets` | sync | The Comments and Newsletter switches |
+| `commentExceptions` | sync | Your Comments URL exceptions |
+| `newsletterExceptions` | sync | Your Newsletter URL exceptions |
+| `portal` | sync | The MSN and Bing switches |
+| `errors` | local | The error log, last 50. Per machine, never synced |
 
 A key only exists once you've changed that setting. A fresh install has none
 and runs on the defaults.
 
-On disk it's a small LevelDB folder in your Chrome profile, named after the
+Chrome caps synced storage at 8 KB per key, which is roughly 300 entries in
+one exception list. Past that, the settings page shows "Could not save"
+instead of "Saved" and keeps what was saved before.
+
+**Upgrading from an older build.** Settings used to live in
+`chrome.storage.local`. On install, update or browser start, `background.js`
+copies any settings it finds there into sync. It never overwrites a value
+sync already holds, and it only deletes the local copy once sync has
+accepted it. If sync refuses (over quota, say), nothing is deleted and it
+tries again at the next start.
+
+On disk they're small LevelDB folders in your Chrome profile, named after the
 extension's id (shown on `chrome://extensions` with Developer mode on):
+`Sync Extension Settings/<id>/` for the settings and
+`Local Extension Settings/<id>/` for the error log.
 
 ```
-Linux     ~/.config/google-chrome/<Profile>/Local Extension Settings/<id>/
-macOS     ~/Library/Application Support/Google/Chrome/<Profile>/Local Extension Settings/<id>/
-Windows   %LOCALAPPDATA%\Google\Chrome\User Data\<Profile>\Local Extension Settings\<id>\
+Linux     ~/.config/google-chrome/<Profile>/
+macOS     ~/Library/Application Support/Google/Chrome/<Profile>/
+Windows   %LOCALAPPDATA%\Google\Chrome\User Data\<Profile>\
 ```
 
 `<Profile>` is `Default` for the first profile, `Profile 1` and so on after
@@ -163,17 +181,20 @@ To clean up, pick the one that fits:
 
 - **Clear one thing.** Empty an exceptions box, untick back to default, or
   press Clear under Errors.
-- **Reset everything, keep the extension.** Open the settings page,
-  right-click → Inspect → Console, and run `chrome.storage.local.clear()`.
-  Close and reopen the settings page and you're back on the defaults. To
-  drop a single key: `chrome.storage.local.remove('socialExceptions')`.
-- **Remove the extension.** Chrome deletes its storage folder with it. Nothing
-  is left behind.
-- **By hand.** With Chrome closed, delete the `<id>` folder above.
+- **Reset everything, keep the extension.** Press **Reset all settings** at
+  the foot of the settings page, then press it again to confirm. Every setting
+  goes back to default and the exception lists empty, on every machine
+  signed into the same profile. The error log is left alone. To drop a single
+  key by hand, open the settings page, right-click → Inspect → Console, and
+  run `chrome.storage.sync.remove('socialExceptions')`.
+- **Remove the extension.** Chrome deletes its local storage folder with it.
+  Whether the synced copy is kept for a reinstall hasn't been tested.
 
 Two things that aren't stored as settings. The Disqus block's on/off state is
-held by Chrome itself; it goes back to on after an extension update until the
-settings page is opened again, and goes with the extension when it's removed.
+held by Chrome itself; `background.js` sets it from your Comments switch on
+install, update and browser start, and whenever that switch changes,
+including a change synced in from another machine. It goes with the
+extension when it's removed.
 And the `data-ktp-*` markers the extension puts on a page only exist while
 that page is open. Close the tab and they're gone.
 
@@ -749,7 +770,7 @@ I'm not a lawyer and this isn't legal advice.
 | Permission | Why |
 |---|---|
 | `declarativeNetRequest` | three small block-only rulesets, below |
-| `storage` | settings and the error log |
+| `storage` | settings (synced) and the error log (this machine only) |
 
 No `host_permissions`, and no network access to anything. The rules only ever
 block:
@@ -769,8 +790,9 @@ blocking solve different halves.
 
 The extension does not use any of your data, and does not send it anywhere.
 There is no network access of its own, no analytics and no account; the only
-thing stored is your own settings, in `chrome.storage.local`, on your own
-machine. The full policy is in [PRIVACY.md](PRIVACY.md), which is also where
+thing stored is your own settings, in `chrome.storage.sync`. Chrome carries
+those to your other machines through your Google account if you have Chrome
+sync on, and the extension never sees or sends them anywhere itself. The full policy is in [PRIVACY.md](PRIVACY.md), which is also where
 the Chrome Web Store Limited Use disclosure lives.
 
 ## Coverage

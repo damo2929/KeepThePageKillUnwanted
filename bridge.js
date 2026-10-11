@@ -103,7 +103,9 @@
   });
 
   try {
-    chrome.storage.local.get([KEY, PROTECT], (got) => {
+    /* Settings are in sync, so they follow the Chrome profile; only the
+     * per-machine error log above stays in local. */
+    chrome.storage.sync.get([KEY, PROTECT], (got) => {
       if (chrome.runtime.lastError) return;
       apply(got && got[KEY]);
       applyProtect(got && got[PROTECT]);
@@ -112,7 +114,7 @@
     /* Live updates: toggling a channel in the options page takes effect on
      * pages that are already open, without a reload. */
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local') return;
+      if (area !== 'sync') return;
       if (changes[KEY]) apply(changes[KEY].newValue);
       if (changes[PROTECT]) applyProtect(changes[PROTECT].newValue);
     });

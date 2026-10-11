@@ -4,14 +4,17 @@
 anywhere.** That is the whole policy. Everything below is the detail the
 Chrome Web Store asks for, and none of it adds a caveat to that sentence.
 
-Last updated: 2 October 2026.
+Last updated: 11 October 2026.
 Contact: open an issue at <https://github.com/damo2929/KeepThePageKillUnwanted/issues>.
 
 ## The short version
 
 Keep The Page Kill Unwanted collects nothing, sends nothing, and talks to no
 server. It has no analytics, no telemetry, no crash reporting, no advertising
-and no account. Nothing it stores ever leaves the machine it is stored on.
+and no account. Your settings are kept in Chrome's own synced extension
+storage, so if you use Chrome sync they follow your Google account to your
+other machines, exactly as your bookmarks do. The developer never receives
+them.
 
 This policy exists because the Chrome Web Store requires one from any
 extension that handles user data at all, including data that is only ever held
@@ -19,8 +22,9 @@ locally. That is the only kind this extension has.
 
 ## What is stored, and where
 
-Your settings, and nothing else, in `chrome.storage.local` — Chrome's
-per-extension storage on your own computer:
+Your settings, and nothing else, in `chrome.storage.sync` — Chrome's
+per-extension storage, which Chrome itself keeps in step across the machines
+signed into your Chrome profile:
 
 | What | Why |
 | --- | --- |
@@ -29,9 +33,20 @@ per-extension storage on your own computer:
 | Your URL exception lists for comments, social furniture and newsletter sign-ups | So a site you have excepted stays excepted |
 | Whether tracing is on, and which channels | Debugging aid, off by default |
 
-`chrome.storage.local` is local by design: it is not Chrome Sync, so these
-settings do not travel between your devices and are not uploaded to Google or
-to anyone else. Removing the extension removes them with it.
+If you are signed into Chrome with sync turned on, Chrome stores these
+settings with your Google account and copies them to your other devices, under
+Google's own Chrome Sync terms and encryption. If you are not signed in, or
+sync is off, they stay on this computer. Either way the extension has no part
+in the transfer: it never reads them anywhere but in your browser, and never
+sends them to the developer or to anyone else.
+
+One more thing is stored, on this computer only, in `chrome.storage.local`: a
+log of the last 50 errors the extension's own code hit, with the site's
+hostname, shown under Errors on the settings page so you can see it. It is
+never synced or sent, and the settings page's Clear button empties it.
+
+The settings page also has **Reset all settings**, which removes every stored
+setting and exception list, on every synced device.
 
 ## What is not collected
 
@@ -42,7 +57,8 @@ The extension cannot build such a record even accidentally, because it has no
 code that sends anything anywhere.
 
 The URL exception lists are the one place a site name is written down, and you
-are the one who types it. It stays on your machine.
+are the one who types it. Chrome sync carries it to your other devices if you
+use sync; the extension sends it nowhere.
 
 ## What the extension does to pages
 
@@ -67,7 +83,8 @@ told what matched them.
 
 ## Permissions, and why each one exists
 
-- **`storage`** — to keep your settings, as described above.
+- **`storage`** — to keep your settings (synced by Chrome, as described above)
+  and this computer's error log.
 - **`declarativeNetRequest`** — to block the requests listed above. This API
   is deliberately the one that *cannot* report back what you loaded; the rules
   are static and declared in the package.
@@ -104,7 +121,8 @@ published location of this document, and the date above will change with it.
 
 ## Your rights
 
-There is no data to request, correct, export or erase, because none is held
-anywhere but your own computer, where you can remove it at any time by
-uninstalling the extension or clearing the extension's storage. Questions go
+The developer holds no data about you to request, correct, export or erase.
+Your settings are in your own browser and, if you use Chrome sync, your own
+Google account; **Reset all settings** on the settings page removes them
+everywhere, and Chrome's own sync controls cover the rest. Questions go
 in an issue at <https://github.com/damo2929/KeepThePageKillUnwanted/issues>.

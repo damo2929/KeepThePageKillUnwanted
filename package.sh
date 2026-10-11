@@ -83,6 +83,9 @@ for cs in m.get('content_scripts', []):
 for rr in m.get('declarative_net_request', {}).get('rule_resources', []):
     want.add(rr['path'])
 want.update(m.get('icons', {}).values())
+sw = m.get('background', {}).get('service_worker')
+if sw:
+    want.add(sw)
 for key in (m.get('options_ui', {}).get('page'),
             m.get('action', {}).get('default_popup')):
     if key:

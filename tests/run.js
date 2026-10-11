@@ -1388,7 +1388,7 @@ test('comment URL exceptions: own storage key, read by comments.js, written by o
 
 test('comments.js: early stylesheet first, default on, settings saved together', () => {
   const first = commentsSrc.indexOf('\n  install();');
-  const get = commentsSrc.indexOf('chrome.storage.local.get');
+  const get = commentsSrc.indexOf('chrome.storage.sync.get');
   ok(first !== -1 && first < get, 'stylesheet must be installed before settings are read');
   ok(/\.comments !== false/.test(commentsSrc), 'only an explicit false may turn it off');
   ok(commentsSrc.indexOf('wrapsContent(el)') !== -1, 'the live sweep must apply the wraps guard');
@@ -1816,7 +1816,7 @@ test('the widgets channel gates comments, social and newsletter alike', () => {
     /* Read from storage, not from bridge.js's attribute: these run in the
      * isolated world and are already reading the key beside it. */
     ok(src.indexOf('data-ktp-trace') === -1, f + ' must not depend on the bridge attribute');
-    ok(/chrome\.storage\.local\.get\(\[KEY, EXCEPT, TRACE\]/.test(src),
+    ok(/chrome\.storage\.sync\.get\(\[KEY, EXCEPT, TRACE\]/.test(src),
        f + ' does not read the trace setting');
     ok(/changes\[KEY\] \|\| changes\[EXCEPT\] \|\| changes\[TRACE\]/.test(src),
        f + ' does not follow a live change to the trace setting');
@@ -1844,6 +1844,146 @@ test('trace channels and defence names are the same list', () => {
      defs.slice().sort().join(','),
      'what you can switch off must be what you can trace');
   for (const f of FIXED) ok(chans.indexOf(f) !== -1, f + ' must still be traceable');
+});
+
+print('\nsettings in chrome.storage.sync');
+
+/* Settings follow the Chrome profile; only the per-machine error log stays in
+ * local. A reader left on local would see defaults forever once the
+ * migration has emptied it, so this is checked per file, per line. */
+const SYNCED_READERS = ['bridge.js', 'clutter.js', 'comments.js', 'newsletter.js',
+                        'social.js', 'portal.js', 'options.js'];
+
+test('settings are read and written in sync; only errors stays local', () => {
+  for (const f of SYNCED_READERS) {
+    const lines = read(file(f)).split('\n');
+    lines.forEach((l, i) => {
+      if (/chrome\.storage\.local\./.test(l)) {
+        /* The reset clears local too, so an unmigrated copy cannot come back. */
+        ok(/ERRORS/.test(l) || /chrome\.storage\.local\.remove\(RESET,/.test(l),
+           f + ':' + (i + 1) + ' uses local for something other than errors');
+      }
+      if (/area !== 'local'/.test(l)) {
+        throw new Error(f + ':' + (i + 1) + ' listens to local, settings change in sync');
+      }
+    });
+  }
+  for (const f of ['clutter.js', 'comments.js', 'newsletter.js', 'social.js', 'portal.js']) {
+    ok(/area !== 'sync'/.test(read(file(f))), f + ' does not follow live changes in sync');
+  }
+  const bridge = read(file('bridge.js'));
+  ok(/chrome\.storage\.sync\.get\(\[KEY, PROTECT\]/.test(bridge), 'bridge.js must read settings from sync');
+  ok(/chrome\.storage\.local\.set\(\{ \[ERRORS\]/.test(bridge), 'the error log must stay in local');
+});
+
+const bgSrc = read(file('background.js'));
+
+test('the migration list is exactly the keys the settings page saves', () => {
+  const opt = read(file('options.js'));
+  const saved = [...opt.matchAll(/const (?:KEY|PROTECT|SOCIAL|MSN|WIDGETS) = '(\w+)'/g)].map((m) => m[1])
+    .concat([...opt.matchAll(/bindExceptions\('\w+', '(\w+)'\)/g)].map((m) => m[1]));
+  const list = /const SETTINGS = \[([^\]]*)\]/.exec(bgSrc);
+  ok(list, 'background.js has no SETTINGS list');
+  const migrated = [...list[1].matchAll(/'(\w+)'/g)].map((m) => m[1]);
+  eq(migrated.slice().sort().join(','), saved.slice().sort().join(','),
+     'a key saved to sync but not migrated is lost on upgrade');
+  ok(migrated.indexOf('errors') === -1, 'errors is per-machine and must not be migrated');
+});
+
+test('reset removes exactly the migrated settings, from sync and local, never errors', () => {
+  const opt = read(file('options.js'));
+  const consts = {};
+  for (const m of opt.matchAll(/const ([A-Z]+) = '(\w+)';/g)) consts[m[1]] = m[2];
+  const r = /const RESET = \[([^\]]*)\]/.exec(opt);
+  ok(r, 'options.js has no RESET list');
+  const reset = r[1].split(',').map((x) => x.trim()).filter(Boolean)
+    .map((x) => /^'(\w+)'$/.test(x) ? x.slice(1, -1) : consts[x]);
+  const migrated = [.../const SETTINGS = \[([^\]]*)\]/.exec(bgSrc)[1].matchAll(/'(\w+)'/g)].map((m) => m[1]);
+  eq(reset.slice().sort().join(','), migrated.slice().sort().join(','),
+     'reset and migration must cover the same keys');
+  ok(reset.indexOf('errors') === -1, 'reset must leave the error log alone');
+  ok(/chrome\.storage\.sync\.remove\(RESET,/.test(opt), 'reset must clear sync');
+  ok(/chrome\.storage\.local\.remove\(RESET,/.test(opt),
+     'reset must clear local too, or the migration copies old values back');
+  ok(!/\bconfirm\([^)]/.test(opt), 'no blocking confirm() dialog');
+  ok(/id="reset"/.test(read(file('options.html'))), 'the reset button is missing from the settings page');
+});
+
+/* Runs the real background.js against fake storage areas. Each area's methods
+ * return promises, as the MV3 API does; a GLib main loop drains them. */
+const runBackground = (local, sync, opts) => {
+  const o = opts || {};
+  const listeners = {};
+  const area = (store, refuse) => ({
+    get: (keys) => Promise.resolve([].concat(keys).reduce((acc, k) => {
+      if (k in store) acc[k] = JSON.parse(JSON.stringify(store[k]));
+      return acc;
+    }, {})),
+    set: (items) => refuse ? Promise.reject(new Error('QUOTA_BYTES_PER_ITEM quota exceeded'))
+                           : Promise.resolve(Object.assign(store, items)),
+    remove: (keys) => Promise.resolve([].concat(keys).forEach((k) => { delete store[k]; }))
+  });
+  const rulesets = [];
+  const chrome = {
+    storage: {
+      local: area(local), sync: area(sync, o.refuseSync),
+      onChanged: { addListener: (fn) => { listeners.changed = fn; } }
+    },
+    runtime: {
+      onInstalled: { addListener: (fn) => { listeners.installed = fn; } },
+      onStartup: { addListener: (fn) => { listeners.startup = fn; } }
+    },
+    declarativeNetRequest: {
+      updateEnabledRulesets: (r) => { rulesets.push(r); return Promise.resolve(); }
+    }
+  };
+  const quiet = { error: () => {}, log: () => {} };
+  new Function('chrome', 'console', bgSrc)(chrome, quiet);
+  ok(listeners.installed && listeners.startup, 'migration must run on install/update and on start');
+  const loop = GLib.MainLoop.new(null, false);
+  let failed = null;
+  listeners.installed().then(() => loop.quit(), (e) => { failed = e; loop.quit(); });
+  loop.run();
+  if (failed) throw failed;
+  return { rulesets, listeners };
+};
+
+test('migration copies local settings into sync, then removes them from local', () => {
+  const local = { protect: { walls: false }, commentExceptions: ['example.com'],
+                  errors: [{ where: 'x' }] };
+  const sync = {};
+  runBackground(local, sync);
+  eq(JSON.stringify(sync.protect), '{"walls":false}', 'protect was not copied');
+  eq(JSON.stringify(sync.commentExceptions), '["example.com"]', 'exceptions were not copied');
+  eq('protect' in local, false, 'protect must be removed from local once synced');
+  eq('commentExceptions' in local, false, 'exceptions must be removed from local once synced');
+  ok(Array.isArray(local.errors), 'the error log must never be touched');
+  eq('errors' in sync, false, 'the error log must never reach sync');
+});
+
+test('migration never overwrites a value sync already has', () => {
+  const local = { social: { enabled: true } };
+  const sync = { social: { enabled: false } };
+  runBackground(local, sync);
+  eq(sync.social.enabled, false, 'a synced value was clobbered by stale local data');
+  eq('social' in local, false, 'the superseded local copy must still be removed');
+});
+
+test('a refused sync write keeps the local settings for the next start', () => {
+  const local = { socialExceptions: ['a.example'] };
+  const sync = {};
+  runBackground(local, sync, { refuseSync: true });
+  ok(Array.isArray(local.socialExceptions), 'local was emptied although sync refused the copy');
+});
+
+test('the Disqus ruleset follows the synced comments switch', () => {
+  const off = runBackground({}, { widgets: { comments: false } });
+  eq(JSON.stringify(off.rulesets[0]), '{"disableRulesetIds":["widgets"]}', 'switched off but still blocking');
+  const on = runBackground({}, {});
+  eq(JSON.stringify(on.rulesets[0]), '{"enableRulesetIds":["widgets"]}', 'default must block');
+  on.listeners.changed({ widgets: { newValue: { comments: false } } }, 'sync');
+  eq(JSON.stringify(on.rulesets[1]), '{"disableRulesetIds":["widgets"]}',
+     'a change synced in from another machine must reach the ruleset');
 });
 
 print('\nmanifest.json');
@@ -1946,6 +2086,7 @@ test('every file the manifest references exists', () => {
   for (const cs of manifest.content_scripts) for (const j of cs.js) wanted.push(j);
   for (const rr of manifest.declarative_net_request.rule_resources) wanted.push(rr.path);
   if (manifest.options_ui) wanted.push(manifest.options_ui.page);
+  if (manifest.background) wanted.push(manifest.background.service_worker);
   if (manifest.action && manifest.action.default_popup) wanted.push(manifest.action.default_popup);
   for (const k in (manifest.icons || {})) wanted.push(manifest.icons[k]);
   for (const w of wanted) ok(exists(file(w)), 'missing file: ' + w);
