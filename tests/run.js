@@ -68,6 +68,13 @@ function makeSandbox() {
 
   function Element() {}
   Element.prototype.remove = function () { this.__removed = true; };
+  /* A real accessor pair, so the innerHTML guard installs over it. */
+  Object.defineProperty(Element.prototype, 'innerHTML', {
+    configurable: true,
+    enumerable: true,
+    get() { return this.__html || ''; },
+    set(v) { this.__html = String(v); this.__wiped = String(v) === ''; }
+  });
   function Node() {}
   Node.prototype.removeChild = function (c) { c.__removed = true; return c; };
   Node.prototype.appendChild = function (c) { (this.inserted = this.inserted || []).push(c); return c; };
@@ -641,6 +648,96 @@ test('the e/ loader is inserted with anti-adblock switched off', () => {
   const el = loaderTag(s, { 'data-sdk': 'e/1.0.8' });
   el.nodeType = 1;
   eq((insertInto(s, 'appendChild', el).head.inserted || []).length, 1, 'refused although walls is off');
+});
+
+print('\nwalls.js — first-party AdShield wall (finance.yahoo.com, y-l/1.0.1)');
+
+/* The loader is served from the publisher's own CDN, so it runs with
+ * html-load.com blocked, and its wall is three writes in one task:
+ * head.innerHTML = '', body.innerHTML = '', body.appendChild(<error-report
+ * iframe>). Observed in the page with stack traces, not inferred. */
+const withPage = (s) => {
+  s.document.head = s.document.createElement('head');
+  s.document.body = s.document.createElement('body');
+  return s;
+};
+
+test('the y-l/<n>.<n> loader arms', () => {
+  for (const v of ['y-l/1.0.1', 'y-l/1.2.3']) {
+    const s = load(file('walls.js'), makeSandbox());
+    parse(s, loaderTag(s, { 'data-sdk': v, src: 'https://cdn.invalid/du/site/abcdefgh.js' }));
+    eq(sdkGate(s.window), true, v + ' did not arm');
+  }
+});
+
+test('once armed, head, body and html cannot be emptied by innerHTML', () => {
+  const s = load(file('walls.js'), withPage(makeSandbox()));
+  parse(s, loaderTag(s, { 'data-sdk': 'y-l/1.0.1' }));
+  for (const el of [s.document.head, s.document.body, s.html]) {
+    el.innerHTML = '';
+    eq(el.__wiped, undefined, '<' + el.localName + '> was emptied');
+  }
+  const div = s.document.createElement('div');
+  div.innerHTML = '';
+  eq(div.__wiped, true, 'an ordinary element must still be writable');
+  div.innerHTML = '<b>x</b>';
+  eq(div.innerHTML, '<b>x</b>', 'getter no longer reads the native value');
+});
+
+test('innerHTML on body is untouched on a page with no signature', () => {
+  const s = load(file('walls.js'), withPage(makeSandbox()));
+  s.document.body.innerHTML = '';
+  eq(s.document.body.__wiped, true, 'refused on a clean page');
+});
+
+test('innerHTML on body is untouched with DOM protection switched off', () => {
+  const s = withPage(makeSandbox());
+  s.html.setAttribute('data-ktp-off', 'dom');
+  load(file('walls.js'), s);
+  parse(s, loaderTag(s, { 'data-sdk': 'y-l/1.0.1' }));
+  s.document.body.innerHTML = '';
+  eq(s.document.body.__wiped, true, 'refused although dom is off');
+});
+
+const frameTo = (s, src) => {
+  const f = s.document.createElement('iframe');
+  f.src = src;
+  f.nodeType = 1;
+  return f;
+};
+
+test('the error-report frame is never inserted, and the scroll lock is undone', () => {
+  for (const method of ['appendChild', 'insertBefore']) {
+    const s = withPage(makeSandbox());
+    const unlocked = [];
+    s.document.body.style = { setProperty: (p, v) => unlocked.push(p + ':' + v) };
+    s.getComputedStyle = () => ({ overflow: 'hidden', overflowY: 'hidden', position: 'static' });
+    load(file('walls.js'), s);
+    const f = frameTo(s, 'https://report.error-report.com/modal?eventId=&error=Vml0YWw%3D&domain=x');
+    const { head, back } = insertInto(s, method, f);
+    eq((head.inserted || []).length, 0, 'frame inserted via ' + method);
+    eq(back, f, method + ' did not hand the frame back');
+    ok(unlocked.indexOf('overflow:auto') !== -1, 'scroll lock left in place');
+  }
+});
+
+test('other frames are inserted untouched', () => {
+  const s = load(file('walls.js'), makeSandbox());
+  for (const src of ['https://www.youtube.com/embed/abc', 'https://guce.yahoo.com/banners/pok-pre', '']) {
+    const { head } = insertInto(s, 'appendChild', frameTo(s, src));
+    eq((head.inserted || []).length, 1, (src || 'srcless frame') + ' refused');
+  }
+  const script = loaderTag(s, { src: 'https://report.error-report.com/modal' });
+  script.nodeType = 1;
+  eq((insertInto(s, 'appendChild', script).head.inserted || []).length, 1, 'the rule is for frames only');
+});
+
+test('the error-report frame is inserted with anti-adblock switched off', () => {
+  const s = makeSandbox();
+  s.html.setAttribute('data-ktp-off', 'walls');
+  load(file('walls.js'), s);
+  const f = frameTo(s, 'https://report.error-report.com/modal');
+  eq((insertInto(s, 'appendChild', f).head.inserted || []).length, 1, 'refused although walls is off');
 });
 
 print('\nsocial.js — host matching and what must survive');

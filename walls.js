@@ -31,6 +31,8 @@
  *     on scotsman.com and yorkshirepost.co.uk during the 52-article sweep and
  *     needed no change here — verified by probe, not by reading the regex:
  *     appending a div to <body> and calling remove() is refused when armed.
+ *   data-sdk="y-l/1.0.1"   finance.yahoo.com, first-party loader; its wall is
+ *     refused at the write and at insertion (sections 0c and 6)
  *   html-load.com | content-loader.com | error-report.com   loader hosts
  *   data-sdk="e/1.0.8" / "e/1.0.13"   AdShield `e/` line, refused at insertion
  *   "Ads help keep <site> content free"    News Corp wall copy
@@ -225,12 +227,37 @@
     return !!(sdk && SDK_E_ATTR.test(sdk));
   };
 
+  /* ---------- 0c. the error-report frame is never inserted ----------------
+   * Found on finance.yahoo.com, where the `y-l/1.0.1` loader is first-party
+   * (s.yimg.com/du/site/<random>.js), so it runs even with the loader host
+   * blocked. When its payload fetch from <site>.html-load.com fails, it does
+   *
+   *     if (await un()) return;          // network / timing checks only
+   *     document.head.innerHTML = ''; document.body.innerHTML = '';
+   *     document.body.style.overflow = 'hidden';
+   *     <iframe src="https://report.error-report.com/modal?..." 100vw x 100vh>
+   *     document.body.appendChild(iframe)
+   *     setInterval: if (!document.contains(iframe)) return clearInterval(..)
+   *                  if hidden or zero-sized -> escalate
+   *
+   * The two wipes are refused in section 6. The frame is refused here, by its
+   * src on the loader hosts: never inserted, the check loop stands down on its
+   * first tick, where a frame removed after insertion would be judged hidden.
+   * The scroll lock set just before it is undone. */
+  const isReportFrame = (n) =>
+    !!(n && n.nodeType === 1 && n.tagName === 'IFRAME' && n.src && SDK_HOST.test(n.src));
+
   const refuseELoader = (name) => {
     const native = Node.prototype[name];
     if (typeof native !== 'function') return;
     Node.prototype[name] = function (node) {
       if (active('walls') && isELoader(node)) {
         log('walls', 'refused AdShield loader ' + node.getAttribute('data-sdk') + ' (' + name + ')');
+        return node;
+      }
+      if (active('walls') && isReportFrame(node)) {
+        log('walls', 'refused AdShield error-report frame (' + name + ')');
+        unlockScroll();
         return node;
       }
       return native.apply(this, arguments);
@@ -850,6 +877,29 @@
     if (isDefendedChild(child)) { log('dom', 'blocked removeChild of body child'); return child; }
     return removeChild.apply(this, arguments);
   };
+
+  /* The wall in section 0c empties <head> and <body> with one assignment each
+   * and appends its frame in the same task, so restore() never sees an empty
+   * body and remember() then snapshots the frame in place of the article.
+   * Refused at the write instead: the loader does not read it back, and the
+   * page keeps its stylesheets as well as its text. */
+  const innerDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  if (innerDesc && innerDesc.set && innerDesc.get) {
+    try {
+      Object.defineProperty(Element.prototype, 'innerHTML', {
+        configurable: true,
+        enumerable: innerDesc.enumerable,
+        get: innerDesc.get,
+        set(v) {
+          if (domOn() && (this === document.head || isRoot(this))) {
+            log('dom', 'refused innerHTML write on <' + this.localName + '>');
+            return;
+          }
+          return innerDesc.set.call(this, v);
+        }
+      });
+    } catch (e) { log('dom', 'could not guard innerHTML', e); report('innerHTML guard', e); }
+  }
 
   const remember = () => {
     const b = document.body;
