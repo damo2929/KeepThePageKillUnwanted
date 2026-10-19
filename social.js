@@ -295,6 +295,45 @@
                  'iframe[src*="facebook.net/plugins"],' +
                  'iframe[src*="platform.linkedin.com"]';
 
+  /* Every change made to the page is recorded with its undo, so a settings
+   * change can give the page back without a reload: undo everything, then
+   * sweep again under the new settings. A removed node goes back only where
+   * it came from -- its parent still in the page, the sibling it sat before
+   * still beside it -- so a region the site has re-rendered since is left as
+   * the site made it, never doubled. The same function is in social.js,
+   * portal.js and clutter.js; a test holds the three copies together. */
+  const makeJournal = () => {
+    let list = [];
+    const push = (undo) => { list.push(undo); };
+    const detach = (node) => {
+      const parent = node.parentNode;
+      const next = node.nextSibling;
+      node.remove();
+      push(() => {
+        if (!parent || !parent.isConnected || node.isConnected) return;
+        if (next && next.parentNode !== parent) return;
+        parent.insertBefore(node, next);
+      });
+    };
+    const setAttr = (el, name, value) => {
+      const had = el.hasAttribute(name);
+      const old = el.getAttribute(name);
+      push(() => { if (had) el.setAttribute(name, old); else el.removeAttribute(name); });
+      if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
+    };
+    const undoAll = () => {
+      const l = list;
+      list = [];
+      for (let i = l.length - 1; i >= 0; i--) {
+        try { l[i](); } catch (e) { /* the node has gone */ }
+      }
+      return l.length;
+    };
+    return { push, detach, setAttr, undoAll };
+  };
+
+  const journal = makeJournal();
+
   let removed = 0;
   let rewritten = 0;
   let unwrapped = 0;
@@ -365,10 +404,10 @@
   const neutralise = (a) => {
     try {
       if (a.getAttribute('href') === DEAD) return;
-      if (!a.hasAttribute(WAS)) a.setAttribute(WAS, a.getAttribute('href') || '');
-      a.setAttribute('href', DEAD);
-      a.setAttribute('rel', 'noreferrer noopener');
-      a.removeAttribute('target');
+      if (!a.hasAttribute(WAS)) journal.setAttr(a, WAS, a.getAttribute('href') || '');
+      journal.setAttr(a, 'href', DEAD);
+      journal.setAttr(a, 'rel', 'noreferrer noopener');
+      journal.setAttr(a, 'target', null);
       log('neutralised', (a.getAttribute(WAS) || '').slice(0, 60));
       rewritten++;
     } catch (e) { /* ignore */ }
@@ -397,7 +436,7 @@
     }
     try {
       log('removed', node.tagName + ' ' + String(node.className || '').slice(0, 40));
-      node.remove(); removed++;
+      journal.detach(node); removed++;
     } catch (e) { /* already gone */ }
   };
 
@@ -412,6 +451,11 @@
       span.setAttribute(WAS, a.getAttribute(WAS) || '');
       while (a.firstChild) span.appendChild(a.firstChild);
       a.replaceWith(span);
+      journal.push(() => {
+        if (!span.isConnected) return;
+        while (span.firstChild) a.appendChild(span.firstChild);
+        span.replaceWith(a);
+      });
       log('unwrapped', (a.getAttribute(WAS) || '').slice(0, 60));
       unwrapped++;
     } catch (e) { /* already gone */ }
@@ -485,9 +529,9 @@
         }
         if (!q || cfg.platforms[q] === false) continue;
         if (isLink) { neutralise(b); continue; }
-        b.setAttribute(WAS, BUTTON_MARK + q);
-        if ('disabled' in b) b.disabled = true;
-        b.setAttribute('aria-disabled', 'true');
+        journal.setAttr(b, WAS, BUTTON_MARK + q);
+        if ('disabled' in b) journal.setAttr(b, 'disabled', '');
+        journal.setAttr(b, 'aria-disabled', 'true');
         log('button', q, b.getAttribute('aria-label') || b.id ||
                          String(b.className || '').slice(0, 40));
         rewritten++;
@@ -595,9 +639,9 @@
         const hit = embedBox(b, attr);
         if (!hit || hit.box.hasAttribute(WAS)) continue;
         if (hit.p !== 'external' && cfg.platforms[hit.p] === false) continue;
-        hit.box.setAttribute(WAS, EMBED_MARK + hit.p);
-        if ('disabled' in b) b.disabled = true;
-        b.setAttribute('aria-disabled', 'true');
+        journal.setAttr(hit.box, WAS, EMBED_MARK + hit.p);
+        if ('disabled' in b) journal.setAttr(b, 'disabled', '');
+        journal.setAttr(b, 'aria-disabled', 'true');
         log('embed gate', hit.p, (b.textContent || '').trim().slice(0, 40));
         rewritten++;
       } catch (e) { /* ignore */ }
@@ -629,7 +673,7 @@
       for (const e of queryAll('[' + WAS + '^="' + EMBED_MARK + '"]')) prune(e);
       for (const f of queryAll(WIDGET)) {
         log('widget', (f.getAttribute('src') || '').slice(0, 60));
-        f.remove(); removed++;
+        journal.detach(f); removed++;
       }
     } catch (e) { /* ignore */ }
   };
@@ -672,7 +716,10 @@
     setTimeout(() => { queued = false; sweep(); }, 200);
   };
 
+  let started = false;
   const start = () => {
+    if (started) return;
+    started = true;
     addStyle();
     sweep();
     try {
@@ -692,15 +739,19 @@
           location.hostname + location.pathname);
       if (cfg.enabled) start();
     });
-    /* Settings changes apply to the next sweep. What has already been removed
-     * stays removed until the page is reloaded -- the options page says so. */
+    /* A settings change applies to the open page at once: everything this
+     * page was given is handed back from the journal, then the page is swept
+     * again under the new settings. A tracing change alone touches nothing. */
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'sync' || !(changes[KEY] || changes[EXCEPT] || changes[TRACE])) return;
+      if (changes[TRACE]) tracing = traceOn(changes[TRACE].newValue);
+      if (!(changes[KEY] || changes[EXCEPT])) return;
       if (changes[KEY]) applySettings(changes[KEY].newValue);
       if (changes[EXCEPT]) except = changes[EXCEPT].newValue || [];
-      if (changes[TRACE]) tracing = traceOn(changes[TRACE].newValue);
+      log('settings changed, restored', journal.undoAll(), 'change(s);',
+          active() ? 'on' : 'off');
       addStyle();
-      if (active()) sweep();
+      if (active()) { start(); sweep(); }
     });
   } catch (e) {
     /* No storage (should not happen): fall back to the documented defaults. */

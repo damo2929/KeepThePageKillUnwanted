@@ -184,6 +184,45 @@
   const isCard = (n) =>
     CARDS.indexOf(n) !== -1 || CARD_PREFIX.some((p) => n.indexOf(p) === 0);
 
+  /* Every change made to the page is recorded with its undo, so a settings
+   * change can give the page back without a reload: undo everything, then
+   * sweep again under the new settings. A removed node goes back only where
+   * it came from -- its parent still in the page, the sibling it sat before
+   * still beside it -- so a region the site has re-rendered since is left as
+   * the site made it, never doubled. The same function is in social.js,
+   * portal.js and clutter.js; a test holds the three copies together. */
+  const makeJournal = () => {
+    let list = [];
+    const push = (undo) => { list.push(undo); };
+    const detach = (node) => {
+      const parent = node.parentNode;
+      const next = node.nextSibling;
+      node.remove();
+      push(() => {
+        if (!parent || !parent.isConnected || node.isConnected) return;
+        if (next && next.parentNode !== parent) return;
+        parent.insertBefore(node, next);
+      });
+    };
+    const setAttr = (el, name, value) => {
+      const had = el.hasAttribute(name);
+      const old = el.getAttribute(name);
+      push(() => { if (had) el.setAttribute(name, old); else el.removeAttribute(name); });
+      if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
+    };
+    const undoAll = () => {
+      const l = list;
+      list = [];
+      for (let i = l.length - 1; i >= 0; i--) {
+        try { l[i](); } catch (e) { /* the node has gone */ }
+      }
+      return l.length;
+    };
+    return { push, detach, setAttr, undoAll };
+  };
+
+  const journal = makeJournal();
+
   let removed = 0;
 
   /* A card component sits inside a <cs-responsive-card> that owns the tile's
@@ -195,7 +234,7 @@
       const host = el.closest && el.closest('cs-responsive-card');
       if (host) target = host;
     } catch (e) { /* closest not available across a shadow boundary */ }
-    try { target.remove(); removed++; } catch (e) { /* already gone */ }
+    try { journal.detach(target); removed++; } catch (e) { /* already gone */ }
   };
 
   /* A pivot's <li> goes with it, or the list keeps its spacing. Only an
@@ -205,7 +244,7 @@
     if (el.localName !== 'a') return;
     let li = null;
     try { li = el.closest && el.closest('li'); } catch (e) { /* ignore */ }
-    try { (li || el).remove(); removed++; } catch (e) { /* already gone */ }
+    try { journal.detach(li || el); removed++; } catch (e) { /* already gone */ }
   };
 
   let sweeps = 0;
@@ -282,6 +321,7 @@
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'sync' || !changes[KEY]) return;
       cfg = Object.assign({}, DEFAULTS, changes[KEY].newValue || {});
+      log('settings changed, restored', journal.undoAll(), 'node(s)');
       publish();
       styleFeed();
       sweep();

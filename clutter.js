@@ -72,21 +72,62 @@
     widgets.comments !== false &&
     !urlExcepted(location.hostname, location.pathname, except);
 
-  const remove = (list) => {
+  /* Every change made to the page is recorded with its undo, so a settings
+   * change can give the page back without a reload: undo everything, then
+   * sweep again under the new settings. A removed node goes back only where
+   * it came from -- its parent still in the page, the sibling it sat before
+   * still beside it -- so a region the site has re-rendered since is left as
+   * the site made it, never doubled. The same function is in social.js,
+   * portal.js and clutter.js; a test holds the three copies together. */
+  const makeJournal = () => {
+    let list = [];
+    const push = (undo) => { list.push(undo); };
+    const detach = (node) => {
+      const parent = node.parentNode;
+      const next = node.nextSibling;
+      node.remove();
+      push(() => {
+        if (!parent || !parent.isConnected || node.isConnected) return;
+        if (next && next.parentNode !== parent) return;
+        parent.insertBefore(node, next);
+      });
+    };
+    const setAttr = (el, name, value) => {
+      const had = el.hasAttribute(name);
+      const old = el.getAttribute(name);
+      push(() => { if (had) el.setAttribute(name, old); else el.removeAttribute(name); });
+      if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
+    };
+    const undoAll = () => {
+      const l = list;
+      list = [];
+      for (let i = l.length - 1; i >= 0; i--) {
+        try { l[i](); } catch (e) { /* the node has gone */ }
+      }
+      return l.length;
+    };
+    return { push, detach, setAttr, undoAll };
+  };
+
+  const journal = makeJournal();
+
+  /* `undoable` is the comment half, which has a setting and so must be able
+   * to come back when it changes. The clutter half has no switch to obey. */
+  const remove = (list, undoable) => {
     for (const sel of list) {
       let nodes;
       try { nodes = document.querySelectorAll(sel); } catch (e) { continue; }
       for (const el of nodes) {
         if (!el.isConnected) continue;
         console.debug(TAG, 'removed', sel, el.id || String(el.className).slice(0, 40));
-        el.remove();
+        if (undoable) journal.detach(el); else el.remove();
       }
     }
   };
 
   const sweep = () => {
     remove(CLUTTER);
-    if (commentsOn()) remove(COMMENTS);
+    if (commentsOn()) remove(COMMENTS, true);
   };
 
   /* Coalesced, because this now observes every page on the web rather than two.
@@ -120,6 +161,7 @@
       if (area !== 'sync' || !(changes[KEY] || changes[EXCEPT])) return;
       if (changes[KEY]) widgets = changes[KEY].newValue || {};
       if (changes[EXCEPT]) except = changes[EXCEPT].newValue || [];
+      journal.undoAll();
       sweep();
     });
   } catch (e) { /* no storage: the comment half stays off */ }

@@ -2006,6 +2006,299 @@ test('reset removes exactly the migrated settings, from sync and local, never er
   ok(/id="reset"/.test(read(file('options.html'))), 'the reset button is missing from the settings page');
 });
 
+/* The undo journal that lets a settings change apply to an open page. One
+ * function, copied into three content scripts that cannot share code. */
+const JOURNAL_FILES = ['social.js', 'portal.js', 'clutter.js'];
+const liftJournal = (name) => {
+  const src = read(file(name));
+  const i = src.indexOf('const makeJournal = ');
+  ok(i !== -1, 'no makeJournal in ' + name);
+  return src.slice(i, src.indexOf('\n\n', i));
+};
+const makeJournal = new Function(liftJournal('social.js') + '; return makeJournal;')();
+
+/* Just enough of a DOM tree: order, parents, connection, attributes. */
+const fakeNode = (name) => {
+  const n = {
+    name, kids: [], parentNode: null, attrs: {}, root: false,
+    get nextSibling() {
+      if (!n.parentNode) return null;
+      const k = n.parentNode.kids;
+      return k[k.indexOf(n) + 1] || null;
+    },
+    get isConnected() { let p = n; while (p.parentNode) p = p.parentNode; return p.root; },
+    remove() { if (n.parentNode) { const k = n.parentNode.kids; k.splice(k.indexOf(n), 1); n.parentNode = null; } },
+    append(...c) { c.forEach((x) => n.insertBefore(x, null)); return n; },
+    insertBefore(c, ref) {
+      c.remove();
+      const k = n.kids;
+      k.splice(ref ? k.indexOf(ref) : k.length, 0, c);
+      c.parentNode = n;
+    },
+    hasAttribute: (a) => a in n.attrs,
+    getAttribute: (a) => (a in n.attrs ? n.attrs[a] : null),
+    setAttribute: (a, v) => { n.attrs[a] = String(v); },
+    removeAttribute: (a) => { delete n.attrs[a]; }
+  };
+  return n;
+};
+const order = (p) => p.kids.map((k) => k.name).join(',');
+
+test('the undo journal is the same function in every script that uses it', () => {
+  const ref = liftJournal('social.js');
+  for (const f of JOURNAL_FILES) eq(liftJournal(f), ref, f + ' has drifted from social.js');
+});
+
+test('undo puts removed nodes back where they were, in order', () => {
+  const j = makeJournal();
+  const root = fakeNode('root'); root.root = true;
+  const a = fakeNode('a'), b = fakeNode('b'), c = fakeNode('c');
+  root.append(a, b, c);
+  j.detach(b);
+  j.detach(c);
+  j.detach(a);
+  eq(order(root), '', 'all removed');
+  eq(j.undoAll(), 3, 'undo count');
+  eq(order(root), 'a,b,c', 'order after undo');
+  eq(j.undoAll(), 0, 'the journal empties once undone');
+});
+
+test('undo leaves a region the site has redrawn alone', () => {
+  const j = makeJournal();
+  const root = fakeNode('root'); root.root = true;
+  const row = fakeNode('row'), icon = fakeNode('icon'), next = fakeNode('next');
+  root.append(row);
+  row.append(icon, next);
+  j.detach(icon);
+  row.remove();                      /* the site replaced the whole row */
+  j.undoAll();
+  eq(order(row), 'next', 'a node was put back into a parent no longer on the page');
+  const k = makeJournal();
+  const list = fakeNode('list'); root.append(list);
+  const x = fakeNode('x'), y = fakeNode('y');
+  list.append(x, y);
+  k.detach(x);
+  y.remove();                        /* the sibling it sat before has gone */
+  list.append(fakeNode('fresh'));
+  k.undoAll();
+  eq(order(list), 'fresh', 'a node was put back beside content the site redrew');
+  const m = makeJournal();
+  const z = fakeNode('z'); list.append(z);
+  m.detach(z);
+  list.insertBefore(z, list.kids[0]);  /* the site put it back itself, elsewhere */
+  m.undoAll();
+  eq(order(list), 'z,fresh', 'a node the site put back was moved again');
+});
+
+test('undo restores attributes exactly, including ones that were absent', () => {
+  const j = makeJournal();
+  const el = fakeNode('a');
+  el.setAttribute('href', 'https://www.linkedin.com/in/x');
+  el.setAttribute('target', '_blank');
+  j.setAttr(el, 'data-ktp-was', 'https://www.linkedin.com/in/x');
+  j.setAttr(el, 'href', 'http://localhost/removeme');
+  j.setAttr(el, 'target', null);
+  j.setAttr(el, 'href', 'http://localhost/removeme');   /* re-fired after a re-render */
+  eq(el.getAttribute('target'), null, 'target removed');
+  j.undoAll();
+  eq(JSON.stringify(el.attrs), JSON.stringify({ href: 'https://www.linkedin.com/in/x', target: '_blank' }),
+     'attributes after undo');
+});
+
+test('a settings change undoes the page before sweeping it again', () => {
+  const soc = read(file('social.js'));
+  const h = soc.slice(soc.indexOf('chrome.storage.onChanged.addListener'));
+  ok(h.indexOf('journal.undoAll()') !== -1 && h.indexOf('journal.undoAll()') < h.indexOf('sweep()'),
+     'social.js must undo before it re-sweeps');
+  ok(/if \(active\(\)\) \{ start\(\); sweep\(\); \}/.test(h),
+     'social.js must start when switched on after the page loaded');
+  ok(/let started = false;\s*const start = \(\) => \{\s*if \(started\) return;/.test(soc),
+     'start() must be safe to call twice, or a second observer and interval stack up');
+  ok(h.indexOf("if (!(changes[KEY] || changes[EXCEPT])) return;") < h.indexOf('journal.undoAll()'),
+     'a tracing change alone must not undo and redo the page');
+  for (const f of ['portal.js', 'clutter.js']) {
+    const s = read(file(f));
+    const g = s.slice(s.indexOf('chrome.storage.onChanged.addListener'));
+    ok(g.indexOf('journal.undoAll()') !== -1 && g.indexOf('journal.undoAll()') < g.indexOf('sweep()'),
+       f + ' must undo before it re-sweeps');
+  }
+});
+
+test('social.js changes the page only through the journal', () => {
+  const soc = read(file('social.js'));
+  const body = soc.replace(liftJournal('social.js'), '');
+  ok(!/\b(a|b|f|node|hit\.box)\.setAttribute\(/.test(body), 'a page attribute is set without an undo');
+  ok(!/\.disabled = true/.test(body), 'a control is disabled without an undo');
+  ok(!/\b(node|f)\.remove\(\)/.test(body), 'a node is removed without an undo');
+  for (const f of ['portal.js']) {
+    ok(!/\b(target|li \|\| el|el)\)?\.remove\(\)/.test(read(file(f)).replace(liftJournal(f), '')),
+       f + ' removes a node without an undo');
+  }
+});
+
+/* Runs the real options.js against stub elements and a callback-style storage,
+ * and hands back the elements and the onChanged listener it registered. */
+const runOptions = (sync, opts) => {
+  opts = opts || {};
+  const els = {};
+  const el = (id, extra) => els[id] || (els[id] = Object.assign({
+    id, checked: false, value: '', disabled: false, hidden: false, textContent: '',
+    classList: { add() {}, remove() {} },
+    on: {}, setAttribute() {}, appendChild() {}, remove() {}, click() { this.clicked = true; },
+    addEventListener(t, f) { this.on[t] = f; }
+  }, extra || {}));
+  const group = (cls, values) => values.map((v) => el(cls + ':' + v, { value: v }));
+  const lists = {
+    '.ch': group('ch', ['walls', 'timers', 'consent', 'widgets']),
+    '.def': group('def', ['walls', 'consent', 'cookies', 'dom']),
+    '.plat': group('plat', ['facebook', 'instagram', 'x', 'tiktok', 'linkedin', 'snapchat']),
+    'input[name="mode"]': group('mode', ['remove', 'mark'])
+  };
+  const doc = {
+    activeElement: null,
+    getElementById: (id) => el(id),
+    querySelectorAll: (q) => lists[q] || [],
+    body: el('body'),
+    createElement: () => el('tmp' + Math.random()),
+    createTextNode: () => ({})
+  };
+  const listeners = [];
+  const area = (store) => ({
+    get: (keys, cb) => cb([].concat(keys).reduce((a, k) => {
+      if (k in store) a[k] = store[k]; return a; }, {})),
+    set: (o, cb) => { Object.assign(store, o); if (cb) cb(); },
+    remove: (k, cb) => { [].concat(k).forEach((x) => delete store[x]); if (cb) cb(); }
+  });
+  const opened = [];
+  const win = { close() { win.closed = true; } };
+  const chrome = {
+    runtime: { lastError: null, getManifest: () => ({ version: '0' }),
+               getURL: (p) => 'chrome-extension://id/' + p },
+    extension: { getViews: () => (opts.popup ? [win] : []) },
+    tabs: { create: (o) => opened.push(o.url) },
+    declarativeNetRequest: { updateEnabledRulesets: () => Promise.resolve() },
+    storage: { sync: area(sync), local: area({}),
+               onChanged: { addListener: (f) => listeners.push(f) } }
+  };
+  const blobs = [];
+  const URLs = { createObjectURL: (b) => { blobs.push(b.parts.join('')); return 'blob:x'; },
+                 revokeObjectURL() {} };
+  function Blob(parts) { this.parts = parts; }
+  new Function('document', 'chrome', 'location', 'setTimeout', 'clearTimeout',
+               'URL', 'Blob', 'window',
+               read(file('options.js')))(doc, chrome, { reload() {} },
+                                         () => 1, () => {}, URLs, Blob, win);
+  const fire = (changes) => listeners.forEach((f) => f(changes, 'sync'));
+  /* Picks a file: text() resolves synchronously, so no main loop is needed. */
+  const pick = (text) => {
+    el('importfile').files = [{ text: () => ({ then: (ok) => ok(text) }) }];
+    el('importfile').on.change();
+  };
+  return { el, doc, fire, blobs, pick, opened, win, sync };
+};
+
+test('options page repaints when a setting arrives from sync', () => {
+  const o = runOptions({ social: { enabled: true }, socialExceptions: ['a.com'] });
+  eq(o.el('social').checked, true, 'loaded value');
+  eq(o.el('socialExcept').value, 'a.com', 'loaded exceptions');
+  o.fire({ social: { newValue: { enabled: false, keepText: true } },
+           socialExceptions: { newValue: ['github.com', 'b.org'] },
+           widgets: { newValue: { comments: false } },
+           protect: { newValue: { dom: false } },
+           portal: { newValue: { feed: false } },
+           trace: { newValue: { enabled: true, channels: ['widgets'] } } });
+  eq(o.el('social').checked, false, 'social switch after a synced change');
+  eq(o.el('keepText').checked, true, 'keepText after a synced change');
+  eq(o.el('socialExcept').value, 'github.com\nb.org', 'exceptions after a synced change');
+  eq(o.el('hideComments').checked, false, 'comments switch after a synced change');
+  eq(o.el('def:dom').checked, false, 'protection after a synced change');
+  eq(o.el('portalFeed').checked, false, 'MSN feed after a synced change');
+  eq(o.el('enabled').checked && o.el('ch:widgets').checked, true, 'tracing after a synced change');
+  o.fire({ socialExceptions: { newValue: undefined } });
+  eq(o.el('socialExcept').value, '', 'a key removed elsewhere paints as default');
+});
+
+test('a synced change does not overwrite an exception box being typed in', () => {
+  const o = runOptions({ commentExceptions: ['a.com'] });
+  o.doc.activeElement = o.el('commentsExcept');
+  o.el('commentsExcept').value = 'a.com\nhalf-typ';
+  o.fire({ commentExceptions: { newValue: ['other.com'] } });
+  eq(o.el('commentsExcept').value, 'a.com\nhalf-typ', 'typing was overwritten');
+});
+
+test('every key the options page saves is repainted on a sync change', () => {
+  const opt = read(file('options.js'));
+  const consts = {};
+  for (const m of opt.matchAll(/const ([A-Z]+) = '(\w+)';/g)) consts[m[1]] = m[2];
+  const reset = /const RESET = \[([^\]]*)\]/.exec(opt)[1].split(',').map((x) => x.trim())
+    .filter(Boolean).map((x) => /^'(\w+)'$/.test(x) ? x.slice(1, -1) : consts[x]);
+  const painted = [...opt.matchAll(/paint\[([A-Z]+)\] =/g)].map((m) => consts[m[1]])
+    .concat([...opt.matchAll(/bindExceptions\('\w+', '(\w+)'\)/g)].map((m) => m[1]));
+  eq(painted.slice().sort().join(','), reset.slice().sort().join(','),
+     'a saved key with no painter goes stale when it changes on another machine');
+});
+
+test('export writes every setting to JSON, and nothing else', () => {
+  const store = { social: { enabled: false }, socialExceptions: ['github.com'],
+                  widgets: { comments: false }, errors: [{ where: 'x' }] };
+  const o = runOptions(store);
+  o.el('export').on.click();
+  eq(o.blobs.length, 1, 'one file downloaded');
+  const d = JSON.parse(o.blobs[0]);
+  eq(d.app, 'keep-the-page', 'app marker');
+  eq(d.format, 1, 'format');
+  eq(Object.keys(d.settings).sort().join(','), 'social,socialExceptions,widgets', 'keys exported');
+  eq(JSON.stringify(d.settings.social), '{"enabled":false}', 'social exported');
+  eq(JSON.stringify(d.settings.socialExceptions), '["github.com"]', 'exceptions exported');
+  ok(!('errors' in d.settings), 'the error log is per machine and must not be exported');
+});
+
+test('import restores an export exactly, and ignores keys it does not know', () => {
+  const before = { social: { enabled: false, keepText: true }, socialExceptions: ['github.com'],
+                   commentExceptions: ['a.com'] };
+  const o = runOptions(JSON.parse(JSON.stringify(before)));
+  o.el('export').on.click();
+  const file = JSON.parse(o.blobs[0]);
+  file.settings.bogus = { x: 1 };
+  /* Changed since the export: one key altered, one added that the file lacks. */
+  o.sync.social = { enabled: true };
+  o.sync.portal = { feed: false };
+  o.pick(JSON.stringify(file));
+  eq(JSON.stringify(o.sync.social), JSON.stringify(before.social), 'social restored');
+  eq(JSON.stringify(o.sync.socialExceptions), '["github.com"]', 'exceptions restored');
+  ok(!('portal' in o.sync), 'a key the file leaves out goes back to its default');
+  ok(!('bogus' in o.sync), 'an unknown key was stored');
+});
+
+test('a bad settings file changes nothing', () => {
+  const bad = [
+    'not json',
+    JSON.stringify({ settings: { social: { enabled: false } } }),
+    JSON.stringify({ app: 'keep-the-page', format: 99, settings: {} }),
+    JSON.stringify({ app: 'keep-the-page', format: 1, settings: { socialExceptions: 'github.com' } }),
+    JSON.stringify({ app: 'keep-the-page', format: 1, settings: { social: [true] } }),
+    JSON.stringify({ app: 'keep-the-page', format: 1, settings: { commentExceptions: [1] } })
+  ];
+  for (const text of bad) {
+    const o = runOptions({ social: { enabled: true }, commentExceptions: ['a.com'] });
+    o.pick(text);
+    eq(JSON.stringify(o.sync), JSON.stringify({ social: { enabled: true },
+       commentExceptions: ['a.com'] }), 'storage changed by ' + text.slice(0, 60));
+    ok(/^Not imported/.test(o.el('saved').textContent), 'no error shown for ' + text.slice(0, 60));
+  }
+});
+
+test('import from the toolbar popup opens the settings tab instead of a file picker', () => {
+  const o = runOptions({}, { popup: true });
+  o.el('import').on.click();
+  eq(o.opened.length, 1, 'settings tab not opened');
+  ok(/options\.html#backupbox$/.test(o.opened[0]), 'wrong tab url ' + o.opened[0]);
+  ok(!o.el('importfile').clicked, 'file picker opened inside the popup, which closes under it');
+  const t = runOptions({});
+  t.el('import').on.click();
+  ok(t.el('importfile').clicked, 'file picker not opened from the settings tab');
+});
+
 /* Runs the real background.js against fake storage areas. Each area's methods
  * return promises, as the MV3 API does; a GLib main loop drains them. */
 const runBackground = (local, sync, opts) => {
@@ -2368,7 +2661,9 @@ test('clutter.js removes a comment block only under the Comments switch', () => 
   ok(comments[1].indexOf('tp-vuukle') !== -1, 'the comment wrapper must be gated');
   ok(clutter[1].indexOf('tp-vuukle') === -1, 'the comment wrapper must not be unconditional');
   ok(clutter[1].indexOf('vuukle-ads') !== -1, 'the in-widget ads are always clutter');
-  ok(/if \(commentsOn\(\)\) remove\(COMMENTS\)/.test(src), 'COMMENTS must sit behind commentsOn()');
+  ok(/if \(commentsOn\(\)\) remove\(COMMENTS[,)]/.test(src), 'COMMENTS must sit behind commentsOn()');
+  ok(/remove\(COMMENTS, true\)/.test(src),
+     'the comment half has a setting, so its removals must be undoable');
   ok(src.indexOf("const EXCEPT = 'commentExceptions'") !== -1, 'must read the comment exceptions');
   ok(src.indexOf('self.ktpUrlExcepted') !== -1, 'must use the shared matcher');
   ok(!/const urlExcepted = \(host/.test(src), 'must not carry its own copy of the matcher');

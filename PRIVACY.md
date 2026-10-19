@@ -4,7 +4,7 @@
 anywhere.** That is the whole policy. Everything below is the detail the
 Chrome Web Store asks for, and none of it adds a caveat to that sentence.
 
-Last updated: 11 October 2026.
+Last updated: 20 October 2026.
 Contact: open an issue at <https://github.com/damo2929/KeepThePageKillUnwanted/issues>.
 
 ## The short version
@@ -44,6 +44,11 @@ One more thing is stored, on this computer only, in `chrome.storage.local`: a
 log of the last 50 errors the extension's own code hit, with the site's
 hostname, shown under Errors on the settings page so you can see it. It is
 never synced or sent, and the settings page's Clear button empties it.
+
+The settings page can also **Export to JSON**: it writes your settings and
+exception lists to a file on this computer, where you choose, and nowhere
+else. **Import from JSON** reads such a file back into the settings. Neither
+sends anything anywhere.
 
 The settings page also has **Reset all settings**, which removes every stored
 setting and exception list, on every synced device.

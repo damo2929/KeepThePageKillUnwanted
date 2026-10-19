@@ -199,8 +199,10 @@
       (<code>example.com/forum</code>). Pasted URLs are fine.</span></span></label>
   <textarea id="socialExcept" rows="3" spellcheck="false" autocomplete="off"
             placeholder="example.com&#10;example.org/forum"></textarea>
-  <p class="desc" style="margin:8px 0 0">Changes apply to the next sweep.
-     Anything already removed from an open page comes back only on reload.</p>
+  <p class="desc" style="margin:8px 0 0">Changes apply to open pages straight
+     away: links and icons already taken off come back, then the page is
+     swept again under the new settings. If the site has redrawn that part of
+     the page since, it is left as the site drew it.</p>
 </fieldset>
 
 <fieldset id="widgetbox">
@@ -279,6 +281,19 @@
      exceptions so they can never break a page — anything they swallow lands here.</p>
   <ul id="errlist"></ul>
   <button id="clear" type="button">Clear</button>
+</fieldset>
+
+<fieldset id="backupbox">
+  <legend>Backup</legend>
+  <p class="desc" style="margin:0 0 6px">Saves every setting and URL exception
+     list to a JSON file, and loads one back. Keep a copy: removing the
+     extension in Chrome deletes its settings on every synced machine, and the
+     reload arrow does not. Importing replaces the settings on this page with
+     the file's; anything the file leaves out goes back to its default. The
+     error log is not included.</p>
+  <button id="export" type="button">Export to JSON</button>
+  <button id="import" type="button">Import from JSON</button>
+  <input id="importfile" type="file" accept="application/json,.json" hidden>
 </fieldset>
 
 <fieldset id="resetbox">

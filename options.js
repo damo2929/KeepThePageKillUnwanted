@@ -64,13 +64,20 @@
     });
   };
 
-  chrome.storage.sync.get(KEY, (got) => {
-    const t = (got && got[KEY]) || DEFAULTS;
+  /* Every block paints from a stored value through one function, called on
+   * load and again by the sync listener at the foot of this file, so a change
+   * made on another machine reaches an open page instead of being written
+   * back over by its stale checkboxes on the next click. */
+  const paint = {};
+
+  paint[KEY] = (t) => {
+    t = t || DEFAULTS;
     enabled.checked = !!t.enabled;
     const on = Array.isArray(t.channels) ? t.channels : [];
     boxes.forEach((b) => { b.checked = on.indexOf(b.value) !== -1; });
     paintDisabled();
-  });
+  };
+  chrome.storage.sync.get(KEY, (got) => paint[KEY](got && got[KEY]));
 
   enabled.addEventListener('change', save);
   boxes.forEach((b) => b.addEventListener('change', save));
@@ -83,10 +90,11 @@
   const PROTECT = 'protect';
   const defs = [...document.querySelectorAll('.def')];
 
-  chrome.storage.sync.get(PROTECT, (got) => {
-    const p = (got && got[PROTECT]) || {};
+  paint[PROTECT] = (p) => {
+    p = p || {};
     defs.forEach((d) => { d.checked = p[d.value] !== false; });
-  });
+  };
+  chrome.storage.sync.get(PROTECT, (got) => paint[PROTECT](got && got[PROTECT]));
 
   defs.forEach((d) => d.addEventListener('change', () => {
     const p = {};
@@ -140,8 +148,8 @@
     paintSocial();
   };
 
-  chrome.storage.sync.get(SOCIAL, (got) => {
-    const v = Object.assign({}, SOCIAL_DEFAULTS, (got && got[SOCIAL]) || {});
+  paint[SOCIAL] = (s) => {
+    const v = Object.assign({}, SOCIAL_DEFAULTS, s || {});
     const on = Object.assign({}, SOCIAL_DEFAULTS.platforms, v.platforms || {});
     social.checked = v.enabled !== false;
     plats.forEach((p) => { p.checked = on[p.value] !== false; });
@@ -149,7 +157,8 @@
     keepLogins.checked = v.keepLogins !== false;
     keepText.checked = v.keepText === true;
     paintSocial();
-  });
+  };
+  chrome.storage.sync.get(SOCIAL, (got) => paint[SOCIAL](got && got[SOCIAL]));
 
   [social, keepLogins, keepText, ...plats, ...modes]
     .forEach((el) => el.addEventListener('change', saveSocial));
@@ -164,13 +173,14 @@
   const portalTabs = document.getElementById('portalTabs');
   const portalFeed = document.getElementById('portalFeed');
 
-  chrome.storage.sync.get(MSN, (got) => {
-    const v = Object.assign({}, MSN_DEFAULTS, (got && got[MSN]) || {});
+  paint[MSN] = (s) => {
+    const v = Object.assign({}, MSN_DEFAULTS, s || {});
     portalComments.checked = v.comments !== false;
     portalCards.checked = v.cards !== false;
     portalTabs.checked = v.tabs !== false;
     portalFeed.checked = v.feed !== false;
-  });
+  };
+  chrome.storage.sync.get(MSN, (got) => paint[MSN](got && got[MSN]));
 
   [portalComments, portalCards, portalTabs, portalFeed].forEach((el) => el.addEventListener('change', () => {
     chrome.storage.sync.set({
@@ -226,6 +236,10 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes[ERRORS]) renderErrors(changes[ERRORS].newValue);
+    if (area !== 'sync') return;
+    for (const k of Object.keys(changes)) {
+      if (paint[k]) paint[k](changes[k].newValue);
+    }
   });
 
   clear.addEventListener('click', () => {
@@ -254,12 +268,17 @@
 
   const hideNewsletter = document.getElementById('hideNewsletter');
 
-  chrome.storage.sync.get(WIDGETS, (got) => {
-    const w = (got && got[WIDGETS]) || {};
-    const on = w.comments !== false;
-    hideComments.checked = on;
+  /* Paint only: a synced change reaches the ruleset through background.js,
+   * so the repaint does not apply it a second time. */
+  paint[WIDGETS] = (w) => {
+    w = w || {};
+    hideComments.checked = w.comments !== false;
     hideNewsletter.checked = w.newsletter !== false;
-    applyWidgets(on);
+  };
+  chrome.storage.sync.get(WIDGETS, (got) => {
+    const w = got && got[WIDGETS];
+    paint[WIDGETS](w);
+    applyWidgets(!(w && w.comments === false));
   });
 
   /* Both keys written together: storing one alone would drop the other, and
@@ -280,12 +299,15 @@
     const box = document.getElementById(id);
     if (!box) return;
     const list = () => box.value.split('\n').map((s) => s.trim()).filter(Boolean);
-    chrome.storage.sync.get(key, (got) => {
-      const l = got && got[key];
-      box.value = (Array.isArray(l) ? l : []).join('\n');
-    });
-    const save = () => chrome.storage.sync.set({ [key]: list() }, flashSaved);
     let timer = 0;
+    /* A box being typed in keeps what is typed: its save is due, and is the
+     * newer value. */
+    paint[key] = (l) => {
+      if (timer || document.activeElement === box) return;
+      box.value = (Array.isArray(l) ? l : []).join('\n');
+    };
+    chrome.storage.sync.get(key, (got) => paint[key](got && got[key]));
+    const save = () => { timer = 0; chrome.storage.sync.set({ [key]: list() }, flashSaved); };
     box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(save, 500); });
     box.addEventListener('change', () => { clearTimeout(timer); save(); });
   };
@@ -317,6 +339,106 @@
         location.reload();
       });
     });
+  });
+
+  /* ---------- backup: export to and import from JSON ----------------------
+   * Removing the extension deletes its synced settings, and Chrome sends that
+   * deletion to every machine in the profile, so sync is not a backup. This
+   * is: a file the user keeps. It covers exactly RESET, the keys this page
+   * saves; `errors` is this machine's log and is not a setting. */
+  const BACKUP_APP = 'keep-the-page';
+  const BACKUP_FORMAT = 1;
+  const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+  /* Pure: the file's parsed JSON in, the settings to write out, or an Error.
+   * Checked whole before anything is written, so a bad file changes nothing.
+   * Keys this build does not know are reported, never stored. */
+  const importable = (data) => {
+    if (!isObj(data) || data.app !== BACKUP_APP || !isObj(data.settings)) {
+      throw new Error('not a Keep The Page settings file');
+    }
+    if (data.format !== BACKUP_FORMAT) {
+      throw new Error('settings file format ' + data.format + ' is not supported');
+    }
+    const settings = {};
+    const ignored = [];
+    for (const k of Object.keys(data.settings)) {
+      const v = data.settings[k];
+      if (RESET.indexOf(k) === -1) { ignored.push(k); continue; }
+      const ok = /Exceptions$/.test(k)
+        ? Array.isArray(v) && v.every((s) => typeof s === 'string')
+        : isObj(v);
+      if (!ok) throw new Error('"' + k + '" in the file has the wrong shape');
+      settings[k] = v;
+    }
+    return { settings, ignored, missing: RESET.filter((k) => !(k in settings)) };
+  };
+
+  const say = (text) => {
+    clearTimeout(savedTimer);
+    saved.textContent = text;
+    saved.classList.add('on');
+    savedTimer = setTimeout(() => saved.classList.remove('on'), 4000);
+  };
+
+  document.getElementById('export').addEventListener('click', () => {
+    chrome.storage.sync.get(RESET, (got) => {
+      if (chrome.runtime.lastError) { flashSaved(); return; }
+      const data = {
+        app: BACKUP_APP,
+        format: BACKUP_FORMAT,
+        version: chrome.runtime.getManifest().version,
+        exported: new Date().toISOString(),
+        settings: got || {}
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'],
+                                               { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'keep-the-page-settings-' + data.exported.slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      say('Exported');
+    });
+  });
+
+  /* A toolbar popup closes the moment the file picker takes focus, taking the
+   * import with it, so from the popup this opens the page in a tab instead. */
+  const inPopup = () => {
+    try { return chrome.extension.getViews({ type: 'popup' }).indexOf(window) !== -1; }
+    catch (e) { return false; }
+  };
+
+  const importFile = document.getElementById('importfile');
+  document.getElementById('import').addEventListener('click', () => {
+    if (inPopup()) {
+      chrome.tabs.create({ url: chrome.runtime.getURL('options.html#backupbox') });
+      window.close();
+      return;
+    }
+    importFile.value = '';
+    importFile.click();
+  });
+
+  importFile.addEventListener('change', () => {
+    const f = importFile.files && importFile.files[0];
+    if (!f) return;
+    f.text().then((text) => {
+      let got;
+      try { got = importable(JSON.parse(text)); }
+      catch (e) { say('Not imported: ' + e.message); return; }
+      /* Write first, then remove what the file leaves out, so a refused write
+       * (sync quota) removes nothing. The sync listener repaints the page. */
+      chrome.storage.sync.set(got.settings, () => {
+        if (chrome.runtime.lastError) { flashSaved(); return; }
+        chrome.storage.sync.remove(got.missing, () => {
+          if (chrome.runtime.lastError) { flashSaved(); return; }
+          say('Imported' + (got.ignored.length ? '; ignored ' + got.ignored.join(', ') : ''));
+        });
+      });
+    }, () => say('Not imported: the file could not be read'));
   });
 
   /* Build identity, read from the manifest so this page and the manifest can

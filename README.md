@@ -96,7 +96,9 @@ tested it on Chrome.
 ### Removing it
 
 Click **Remove** on its card in `chrome://extensions`. Chrome deletes its
-settings with it. Then delete the folder.
+settings with it, on every machine your Chrome profile syncs to, so press
+**Export to JSON** in Settings first if you might want them back. Then delete
+the folder.
 
 ### If you're changing the code
 
@@ -122,6 +124,7 @@ The page, top to bottom:
 | **Newsletter sign-ups** | Email sign-up popups and in-article boxes, and your URL exceptions | On, no exceptions |
 | **MSN and Bing feeds** | Comments, information cards, section tabs and the feed, on msn.com and bing.com only | All on |
 | **Errors** | Failures the guards swallowed, newest first, repeats counted, with Clear | Empty |
+| **Backup** | *Export to JSON* saves every setting and exception list to a file; *Import from JSON* loads one back, replacing what's there. The error log isn't included | — |
 | **Reset** | Puts every setting back to default and empties the exception lists, on every synced machine. Leaves the error log alone. Click twice | — |
 
 The footer shows the running version, read from the manifest. After a reload,
@@ -187,8 +190,11 @@ To clean up, pick the one that fits:
   signed into the same profile. The error log is left alone. To drop a single
   key by hand, open the settings page, right-click → Inspect → Console, and
   run `chrome.storage.sync.remove('socialExceptions')`.
-- **Remove the extension.** Chrome deletes its local storage folder with it.
-  Whether the synced copy is kept for a reinstall hasn't been tested.
+- **Remove the extension.** Chrome deletes its settings with it, and sends
+  that deletion to Google, so the synced copy goes from every machine too. A
+  reinstall starts from defaults. Press **Export to JSON** first if you want
+  them back, then **Import from JSON** after. The reload arrow on the card
+  keeps your settings; only **Remove** loses them.
 
 Two things that aren't stored as settings. The Disqus block's on/off state is
 held by Chrome itself; `background.js` sets it from your Comments switch on
@@ -756,7 +762,7 @@ Settings:
 | See what would go without removing anything | Social furniture → *Mark only* |
 | Keep sign-in buttons, or links inside article text | Social furniture → Exceptions |
 
-Changes save as you go; reload a page to get back links already taken off it.
+Changes save as you go and apply to open pages straight away; links and icons already taken off a page come back without a reload.
 Section 15 expects people to be able to change their default settings. Here
 you hold the switch, not the platform.
 
