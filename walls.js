@@ -147,7 +147,9 @@
                                                // that modal's classes (#_1t4dzfc,
                                                // .gfe3d6) are build hashes, so the copy
                                                // is the signature, not the names
-    'whitelist (us|this site|our site)'
+    'whitelist (us|this site|our site)',
+    'd[eé]sactiv(er|ez) (votre |le )?bloqueur' // "Veuillez désactiver le bloqueur",
+                                               // lesoleil.com's inline notice
   ].join('|'), 'i');
 
   /* ---------- 0. the loader's recovery gate --------------------------------
@@ -791,6 +793,142 @@
     } catch (e) { report('tcfapi denial', e); }
   };
 
+  /* ---------- 4c. take out the ad boxes that can never fill ----------------
+   * Both answers this file gives an ad stack -- the consent "no" in 4b, and
+   * the refused AdShield loader -- leave Google's ad library (GPT) not
+   * running. The page still reserves room for every slot, and that room stays
+   * as white space above the masthead and between paragraphs:
+   *
+   *   Reach section page   .gpt.top-slot.ssr pinned to 261px by the site's CSS
+   *   Reach article        a .sticky box pinned to 260px, and the masthead
+   *                        placed by `.sticky ~ header { top: 260px }`
+   *   Reach article        "placeholder" units, 168-684px, holding only a
+   *                        zero-width non-joiner; gpt.js requested and failed
+   *   National World       #topBanner, 282px between the menu and headline
+   *   The Guardian         #dfp-ad--top-above-nav, 295px above the masthead
+   *   Newsquest            #DFP_top_leaderboard, 250px under the menu
+   *   Future plc           .dfp-leaderboard-container, 250px under the menu
+   *
+   * Hiding is not enough for the second: the sibling rule still matches a
+   * display:none box, so the masthead hangs 260px down over the headline.
+   * The box has to leave the tree, which is how every other wall here goes.
+   *
+   * Signatures, not sites -- the slot's own naming:
+   *   [id^="div-gpt-ad-"]                     GPT's documented slot ids
+   *   [id^="dfp-ad--"], [id^="DFP_"]          older DFP namings, as an id
+   *   [class^="dfp-"], [class*=" dfp-"]       ... and as a class token
+   *   [data-tmdatatrack-type="commercial"]    Reach's commercial-unit marker
+   *   [class*="AdWrapper__AdDiv-"]            National World's ad component,
+   *                                           by its name; the build hash
+   *                                           after it is never matched
+   * From an empty one, climb while the parent holds no text and no media;
+   * stop at <body>, <main> and <article>, whatever they hold.
+   *
+   * "Not running" is read from GPT itself, `googletag.apiReady`, never from
+   * the <script> tag: the Daily Record carries the tag and the request fails.
+   * Nothing is decided before the load event, since an async gpt.js already
+   * in the page holds that event back. Nothing negative is cached: every pass
+   * re-checks, and if GPT starts later each box goes back where it came from,
+   * unless the page has rebuilt that region since. */
+  const SLOT_SEL = '[id^="div-gpt-ad-"], [id^="dfp-ad--"], [id^="DFP_"], ' +
+                   '[class^="dfp-"], [class*=" dfp-"], ' +
+                   '[data-tmdatatrack-type="commercial"], [class*="AdWrapper__AdDiv-"]';
+  const FILLED = 'iframe,img,video,picture,svg,canvas,object,embed,input,button,textarea,select';
+  const SLOT_STOP = /^(BODY|HTML|MAIN|ARTICLE)$/;
+  const INVISIBLE = /[\s\u200b-\u200d\u2060\ufeff]/g;
+  const slotsOut = [];
+
+  const blankBox = (el) =>
+    !el.querySelector(FILLED) && el.textContent.replace(INVISIBLE, '') === '';
+
+  const gptRunning = () => {
+    const g = window.googletag;
+    return !!(g && g.apiReady === true);
+  };
+
+  const slotsWanted = () =>
+    ((denialInstalled && active('consent')) || (wallPresent() && active('walls'))) &&
+    document.readyState === 'complete' && !gptRunning();
+
+  const restoreSlots = () => {
+    const n = slotsOut.length;
+    while (slotsOut.length) {
+      const { box, parent, next } = slotsOut.pop();
+      try {
+        if (box.isConnected || !parent.isConnected) continue;
+        if (next && next.parentNode !== parent) continue;
+        parent.insertBefore(box, next);
+      } catch (e) { /* the region has gone */ }
+    }
+    log('consent', 'put back ' + n + ' ad slot box(es)');
+  };
+
+  const collapseSlots = () => {
+    let want = false;
+    try { want = slotsWanted(); } catch (e) { return; }
+    if (!want) {
+      if (slotsOut.length) restoreSlots();
+      return;
+    }
+    try {
+      for (const slot of document.querySelectorAll(SLOT_SEL)) {
+        if (!blankBox(slot)) continue;
+        let box = slot;
+        let p;
+        while ((p = box.parentElement) && !SLOT_STOP.test(p.tagName) && blankBox(p)) box = p;
+        slotsOut.push({ box, parent: box.parentNode, next: box.nextSibling });
+        log('consent', 'removed empty ad slot box <' + box.localName + '> for ' +
+            (slot.id ? '#' + slot.id : 'an unnamed slot'));
+        dropNode(box);
+      }
+    } catch (e) { report('collapse ad slots', e); }
+  };
+
+  /* ---------- 4d. inline "turn off your ad blocker" notices ---------------
+   * Not a wall: the page stays readable. lesoleil.com puts it where the
+   * leaderboard would be, 200px above the headline, inside a 290px box:
+   *
+   *   .leader-board-container > .leader-board >
+   *     [empty ad unit, .ad-blocker-warning "... désactiver le bloqueur ...",
+   *      empty ad unit]
+   *
+   * Two signatures, both required, because either alone is wrong:
+   *   its own naming   a class or id word adblock / ad-block / ad-blocker --
+   *                    alone it also names the empty bait divs that
+   *                    detection scripts plant
+   *   its own text     WALL_TEXT, at most 400 characters -- alone it also
+   *                    matches an article about ad blockers
+   * Then the same climb as 4c, so the empty box it sat in goes with it.
+   * Removal does not arm the DOM guards: a notice is not a page emptying
+   * itself, the same reasoning as the consent sweep. */
+  const NOTICE_NAME = /(^|[-_])ad-?block(er)?([-_]|$)/i;
+
+  const namedAdblock = (el) => {
+    const words = (String(el.id || '') + ' ' + String(el.className || '')).split(/\s+/);
+    return words.some((w) => NOTICE_NAME.test(w));
+  };
+
+  const sweepNotices = () => {
+    if (!active('walls')) return;
+    let nodes;
+    try { nodes = document.querySelectorAll('[class*="block" i], [id*="block" i]'); }
+    catch (e) { return; }
+    for (const el of nodes) {
+      try {
+        if (!el.isConnected || !namedAdblock(el)) continue;
+        const text = el.textContent || '';
+        if (text.length > 400 || !WALL_TEXT.test(text)) continue;
+        const parent = el.parentElement;
+        dropNode(el);
+        let box = null;
+        let p = parent;
+        while (p && !SLOT_STOP.test(p.tagName) && blankBox(p)) { box = p; p = p.parentElement; }
+        if (box) dropNode(box);
+        log('walls', 'removed inline ad-blocker notice' + (box ? ' and its empty <' + box.localName + '>' : ''));
+      } catch (e) { report('ad-blocker notice', e); }
+    }
+  };
+
   /* ---------- 5. refuse to store the consent record ----------------------- */
 
   /* Removing the overlay is only half of it. If the CMP still writes its
@@ -938,6 +1076,8 @@
     sweepWalls();
     sweepConsent();
     denyConsent();
+    collapseSlots();
+    sweepNotices();
   }
 
   new MutationObserver(tick).observe(document.documentElement, { childList: true });
