@@ -462,10 +462,20 @@ in Protections.
 A geo-block done properly, on the server, sends nothing to restore, and
 this extension leaves it alone.
 
+No vendor sells this one. It's KuCoin's own code, its in-house
+`@kudos/runtime` framework, and the rule list comes from KuCoin's own
+server. The source map is withheld, so the team behind it isn't public.
+The UK FCA is reported to have put KuCoin on its warning list in October
+2023 for marketing in Britain without permission, which is the likely
+reason UK readers get the redirect. If so, that's a reason not to send the
+article, not a reason to send it and then take it back. See [Where these
+vendors are based](#where-these-vendors-are-based).
+
 ## The anti-adblock malware, and who makes it
 
 None of this is anonymous code. Each mechanism above belongs to a named
-commercial vendor, and the publisher chose to deploy it. Every signature,
+commercial vendor, and the publisher chose to deploy it. The exception is
+KuCoin's fake geo-block, which is its own code. Every signature,
 hostname and code fragment below was read off a live page, not taken from
 documentation, because none of these products document how they work.
 
@@ -641,6 +651,7 @@ That's not the reader's behaviour that needs fixing.
 | **Usercentrics** | Germany, Munich | |
 | **TrustArc** | United States, San Francisco | Was TRUSTe. |
 | **Google Funding Choices** | United States, Mountain View | |
+| **KuCoin** (its own code, no vendor) | Seychelles (Mek Global Limited) and Singapore (PhoenixFin Pte. Ltd) *(reported operating companies)* | The fake geo-block in section 6. Written in-house as `@kudos/runtime`, a private package that isn't on the public npm registry, served from `assets.staticimg.com`. The rules come from KuCoin's own `/_api/compliance-biz/` service. The Seychelles regulator says Mek Global holds no licence from it ([FSA Seychelles](https://fsaseychelles.sc/media-corner/regulatory-updates/alert-mek-global-limited-207897)). |
 
 Two caveats before you quote any of this.
 

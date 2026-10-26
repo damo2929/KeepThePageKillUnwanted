@@ -294,6 +294,19 @@ axios, whose `transformResponse` parses with `JSON.parse`). Signature: the
 response's own shape, `data.config.forbidden_pages` holding `/`-paths. No
 hostname, no endpoint path. Switched by `walls`.
 
+**There is no vendor.** Unlike AdShield or Freestar, this is KuCoin's own
+code: `@kudos/runtime` (`window.KudosRuntime`), one of a family of private
+`@kudos/*` packages (design, header, footer, next, bridge) that the page's
+telemetry reports next to KuCoin app names (`ucenter-web-kudos`,
+`news-web-kudos`). None of them are on the public npm registry, the
+source map 403s, and the log strings are Chinese ("访问的页面被合规性规则禁止",
+"the visited page is forbidden by compliance rules"). `assets.staticimg.com`
+sits next to KuCoin's own domains in the site's CSP and serves its CMS images.
+Its whois is privacy-redacted, so ownership is inferred from use, not on
+record. Reported operators: Mek Global Limited (Seychelles) and PhoenixFin
+Pte. Ltd (Singapore). The likely reason for the UK rule is a reported FCA
+warning-list entry (October 2023), not verified against the FCA list itself.
+
 **Do not block or fail the rules request.** The same function has a
 `rules_failed_only` branch that redirects to `/forbidden?type=compliance`
 when the request fails outside an observe window. Emptying the list is the
