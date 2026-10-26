@@ -35,6 +35,8 @@
  *     refused at the write and at insertion (sections 0c and 6)
  *   html-load.com | content-loader.com | error-report.com   loader hosts
  *   data-sdk="e/1.0.8" / "e/1.0.13"   AdShield `e/` line, refused at insertion
+ *   data.config.forbidden_pages   kucoin.com, a fake geo-block: the article is
+ *     served whole, then a script redirects away from it (section 3b)
  *   "Ads help keep <site> content free"    News Corp wall copy
  *   "please disable the ad blocker"        generic wall instruction
  *
@@ -502,6 +504,46 @@
   shim('confirm', false);
   shim('alert', undefined);
   shim('prompt', null);
+
+  /* ---------- 3b. a page-ban list is emptied before a redirect reads it ----
+   * Found on kucoin.com news articles. The server sends the whole article,
+   * body and all. Then the site's own runtime (@kudos/runtime) fetches a rule
+   * list for the reader's region and, if the current path is on it, leaves:
+   *
+   *     s = rules.data.config.forbidden_pages || []
+   *     if (s.some(p => match(p).test(path)))
+   *       location.replace('/restrict?code=PAGE_COMPLIANCE')
+   *
+   * Rule 4: the replace() cannot be intercepted, so the list is the gate. It
+   * is emptied as it is parsed, the match finds nothing, the article stays.
+   * Emptied, never failed: the same runtime treats a rules request that FAILS
+   * as worse and redirects to /forbidden?type=compliance, which is also why
+   * blocking the endpoint is no fix (rule 3). The rest of `config` -- which
+   * banners and menu items to hide -- is left as sent.
+   *
+   * By the response's own shape, `data.config.forbidden_pages` holding paths,
+   * never the endpoint or the host. Its client is axios, whose
+   * transformResponse parses with JSON.parse, so that is the one hook. A clean
+   * page pays a typeof per parse. */
+  const unban = (v) => {
+    try {
+      const cfg = v && typeof v === 'object' && v.data && v.data.config;
+      const list = cfg && cfg.forbidden_pages;
+      if (Array.isArray(list) && list.length &&
+          list.every((p) => typeof p === 'string' && p.charAt(0) === '/') &&
+          active('walls')) {
+        cfg.forbidden_pages = [];
+        log('walls', 'emptied a page-ban list of ' + list.length + ' paths before the redirect read it');
+      }
+    } catch (e) { report('page-ban list', e); }
+    return v;
+  };
+
+  const JSONs = window.JSON;
+  if (JSONs && typeof JSONs.parse === 'function') {
+    const parse = JSONs.parse;
+    JSONs.parse = function () { return unban(parse.apply(this, arguments)); };
+  }
 
   /* ---------- 4. consent-or-pay walls ------------------------------------- */
 

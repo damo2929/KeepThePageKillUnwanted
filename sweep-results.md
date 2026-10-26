@@ -303,3 +303,21 @@ came back empty while the band was plainly on screen in the screenshots.
 `isAccessibleForFree: False` and rendered every paragraph. The screening rule
 has been amended: the flag is a pre-filter, the visible-paragraph count is the
 verdict.
+
+## kucoin.com — fake geo-block, added 2026-10-26
+
+Version `0.1 (2026-10-26 18:51:27)`, user's own Chrome profile, UK address.
+Two articles picked from the first article's own "Featured" links.
+
+    before   /news/flash/open-source-project-gpu-unlock-...   -> /restrict?code=PAGE_COMPLIANCE
+             within 2s, both runs. Served HTML (curl): 200, whole article body.
+             rules response: forbidden_pages, 58 paths, incl. /news, /news/:sub1, /news/:sub1/:sub2
+             first reload attempt: JSON.parse native on example.com while remove()
+             was wrapped -- old build still loaded, not a failed fix
+
+    after    article 1  GPU Unlock          2/8/16/25s  path kept, sheets 12, paras 13/13
+             article 2  Bitcoin ETFs $442M  2/8/16/25s  path kept, sheets 12, paras 28/28
+             both scrolled to the footer: no fixed overlay, screenshots show text to the foot.
+             KuCoin's own "not directed at UK persons" banner still shown -- left alone.
+
+Not run: incognito.

@@ -12,6 +12,10 @@ It is not a paywall bypass. If the server never sent the article, nothing here
 conjures it up. What it keeps is content that arrived in your browser and was
 then destroyed in your browser.
 
+The same goes for fake geo-blocks: the server sends the article to everyone,
+then a script on your machine sends you to a "restricted region" page. A real
+geo-block, where the server refuses to send the article, is left alone.
+
 ## Install
 
 There's no Chrome Web Store listing and no packaged `.crx` file. You load it
@@ -304,7 +308,7 @@ a Clear button.
 
 ## How it works
 
-Five mechanisms, each armed by a signature, not a list of domains. `walls.js`
+Six mechanisms, each armed by a signature, not a list of domains. `walls.js`
 runs on every site, but nothing acts until a signature turns up. On a clean
 site every hook passes straight through and no timer, node or dialog is
 touched.
@@ -431,6 +435,33 @@ Embedded posts, a quoted tweet or TikTok in an article, are content, not
 furniture, and stay put. The platforms' own sites are excluded in the
 manifest, so visiting facebook.com doesn't strip facebook.com.
 
+### 6. Fake geo-blocks
+
+kucoin.com's news articles are served whole, body and all, to a UK address.
+Then the site's own script fetches a list of paths banned for your region and,
+if you're on one, leaves:
+
+```js
+s = rules.data.config.forbidden_pages || []
+if (s.some(p => match(p).test(path))) location.replace('/restrict?code=PAGE_COMPLIANCE')
+```
+
+That isn't a geo-block. The article has already arrived. It's a script on your
+computer taking it away again, the same as the walls above, and the
+"Important Notice" page is what you get instead.
+
+`location.replace()` can't be intercepted, so the list is the gate. It's
+emptied as the page parses it, the match finds nothing, and the article stays.
+Blocking the rules request would be worse: the same script treats a failed
+request as grounds to send you to `/forbidden` instead. Everything else in
+the response is left as sent, including KuCoin's banner saying its material
+isn't directed at UK readers. Matched on the response's own shape,
+`data.config.forbidden_pages`, not on the site, and switched by **Ad walls**
+in Protections.
+
+A geo-block done properly, on the server, sends nothing to restore, and
+this extension leaves it alone.
+
 ## The anti-adblock malware, and who makes it
 
 None of this is anonymous code. Each mechanism above belongs to a named
@@ -494,6 +525,10 @@ send the article to people who haven't paid. That touches nowt on my computer
 and I've no argument with it. The paywalls on thetimes.com and theverge.com
 are left alone on purpose. What I object to is sending me the article, then
 running code on my machine to delete it.
+
+The same holds for a geo-block done in the browser. If the server sends the
+article and a script on my machine then navigates away from it, that's the
+same act as blanking the `<body>`, whatever the notice it shows says.
 
 Worth knowing who writes this code. Every vendor whose code I'm calling out
 here is based outside the United Kingdom: AdShield is reported to be South
@@ -815,6 +850,7 @@ domains, with stylesheet counts and consent-banner timings for each.
 | notebookcheck.net | AdShield, no gate | fixed |
 | pagesix.com | `<dialog>` forced visible by CSS | fixed |
 | euronews.com | floating video + widget clutter | fixed |
+| kucoin.com news | fake geo-block, `forbidden_pages` redirect | fixed |
 
 ## Tests
 

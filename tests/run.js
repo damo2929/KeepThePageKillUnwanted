@@ -1054,6 +1054,49 @@ test('the e/ loader is inserted with anti-adblock switched off', () => {
   eq((insertInto(s, 'appendChild', el).head.inserted || []).length, 1, 'refused although walls is off');
 });
 
+print('\nwalls.js — page-ban list emptied before the redirect (kucoin.com)');
+
+/* The served article is whole; the runtime then reads data.config.forbidden_pages
+ * and location.replace()s to /restrict when the path is on it. The sandbox gets
+ * its own JSON object so the hook never lands on gjs's real JSON.parse. */
+const BAN_RULES = JSON.stringify({
+  success: true, code: '200',
+  data: { config: {
+    forbidden_pages: ['/news', '/news/:sub1', '/news/:sub1/:sub2', '/markets'],
+    'compliance.homepage.stepGuide.UK': { foo: 1 }
+  } }
+});
+const withJSON = (s) => { s.window.JSON = { parse: JSON.parse, stringify: JSON.stringify }; return s; };
+
+test('the forbidden_pages list is empty by the time the page sees it', () => {
+  const s = load(file('walls.js'), withJSON(makeSandbox()));
+  const r = s.window.JSON.parse(BAN_RULES);
+  eq(r.data.config.forbidden_pages.length, 0, 'list survived');
+  ok(r.data.config['compliance.homepage.stepGuide.UK'], 'rest of config was touched');
+  eq(r.success, true, 'response flag changed');
+});
+
+test('other JSON, and look-alike shapes, parse untouched', () => {
+  const s = load(file('walls.js'), withJSON(makeSandbox()));
+  const P = s.window.JSON.parse;
+  eq(P('"text"'), 'text', 'string');
+  eq(P('null'), null, 'null');
+  eq(P('[1,2]').length, 2, 'array');
+  eq(P('{"forbidden_pages":["/news"]}').forbidden_pages.length, 1, 'top-level list emptied');
+  eq(P('{"data":{"config":{"forbidden_pages":["news","x"]}}}').data.config.forbidden_pages.length, 2,
+     'non-path entries emptied');
+  eq(P('{"data":{"config":{"forbidden_pages":"/news"}}}').data.config.forbidden_pages, '/news',
+     'non-array changed');
+  eq(P('[1,2]', (k, v) => (typeof v === 'number' ? v * 10 : v))[1], 20, 'reviver not passed through');
+});
+
+test('the list is left alone with anti-adblock switched off', () => {
+  const s = withJSON(makeSandbox());
+  s.html.setAttribute('data-ktp-off', 'walls');
+  load(file('walls.js'), s);
+  eq(s.window.JSON.parse(BAN_RULES).data.config.forbidden_pages.length, 4, 'emptied although walls is off');
+});
+
 print('\nwalls.js — first-party AdShield wall (finance.yahoo.com, y-l/1.0.1)');
 
 /* The loader is served from the publisher's own CDN, so it runs with

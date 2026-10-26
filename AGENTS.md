@@ -182,6 +182,7 @@ this repo**; those belong in the exception lists, which are theirs.
 | listentotaxman.com | AdShield `l/1.1.10` recovery script -> native `confirm()` | **Fixed** — `loader-check` gate pinned by signature |
 | lesoleil.com, lenouvelliste.ca | CookieYes, no reject button | Refused via preference centre, by class signature — see CookieYes section |
 | phoronix.com | Freestar nag, fixed overlay z=999999; AdShield `e/1.0.8` inline bootstrap | **Fixed** — `WALL_TEXT` inflection; `e/` loader refused at insertion, see below |
+| kucoin.com news | Fake geo-block: article served whole, then `@kudos/runtime` reads `data.config.forbidden_pages` and `location.replace`s to `/restrict` | **Fixed** — list emptied at `JSON.parse`, see below. KuCoin's "not directed at UK persons" banner is left in place |
 | theverge.com | PMC "duet" privacy notice, no refusal in page | **Removed** by class (`.duet--navigation--pmc-privacy-banner`), never closed. The Zephr subscription gate (`isAccessibleForFree: false`) is **deliberately not touched** — a paywall, like thetimes.com |
 
 Full evidence for all of these is in `sweep-results.md` (52 articles, 26
@@ -270,6 +271,47 @@ to the loader host, mirrors or second stage, 7 stylesheets, text renders to the
 foot. Freestar ads still load -- this is not an ad blocker. Not established:
 whether the "ad blocker is on" modal was AdShield's; it showed on neither
 article before or after.
+
+## kucoin.com — a fake geo-block
+
+Added at the user's direction, on the project's existing line: content the
+server sent and a script then took away is in scope; gating done on the
+server is not. A geo-block that is decided in the browser after the article
+has arrived is the first kind, so it is treated as a wall.
+
+**The served HTML is the whole article.** `curl` from a UK address gets a 200
+and 8.4k characters of article text. The redirect is client-side, in
+`@kudos/runtime` (`assets.staticimg.com`):
+
+    rules = GET /_api/compliance-biz/web/compliance/rule   (X-SYSTEM: web)
+    s = rules.data.config.forbidden_pages || []            58 paths for GB, incl. /news, /news/:sub1
+    if (path matches s && path not /restrict|/forbidden|/error|/404)
+      location.replace('/restrict?code=PAGE_COMPLIANCE')   -> "Important Notice" page
+
+Rule 4 rules out stopping the `replace()`, so the list is the gate.
+`walls.js` section 3b empties it as `JSON.parse` returns it (the client is
+axios, whose `transformResponse` parses with `JSON.parse`). Signature: the
+response's own shape, `data.config.forbidden_pages` holding `/`-paths. No
+hostname, no endpoint path. Switched by `walls`.
+
+**Do not block or fail the rules request.** The same function has a
+`rules_failed_only` branch that redirects to `/forbidden?type=compliance`
+when the request fails outside an observe window. Emptying the list is the
+one input that produces "no redirect" on every branch. Rule 3 again.
+
+**Left alone, deliberately:** the rest of `config` (UI flags such as
+`compliance.homepage.*`) and KuCoin's red banner saying the material is not
+directed at UK persons. The banner is a notice, not a removal. Also not
+touched, because it has not been seen to fire: the news app's own axios
+interceptor, which `location.replace`s to `/restrict` on any API response
+with `code: "50003"` and a `/restrict` url. If an article ever bounces with
+3b armed, look there first.
+
+**Verified** on two articles picked from the page's own links (GPU Unlock;
+Bitcoin ETFs $442.67M). At 2/8/16/25s: path unchanged, 12 stylesheets,
+13/13 and 28/28 paragraphs visible, scrolled to the footer, no fixed overlay.
+Before the fix, the same first article redirected within 2s. **Not verified:**
+incognito.
 
 ## Consent-or-pay walls
 
