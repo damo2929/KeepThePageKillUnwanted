@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Keep The Page Kill Unwanted",
-  "version": "0.1.1026.1911",
-  "version_name": "0.1 (2026-10-26 19:11:46)",
+  "version": "0.1.1028.1422",
+  "version_name": "0.1 (2026-10-28 14:22:17)",
   "description": "Stops anti-adblock walls from hiding pages, and removes pop-out video ads and third-party widget clutter.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzW7tEtZwiwmtJh5d4gZ4u7hGCqqHc6WgcX/LdZpJR7XunIooSGvDs/tuIH+k+K4o6rEJf4AvTieD/PxsANZAFA2M7i3mDYi/RhWzBFx+xBu5sgOA5L9UFfvY8YGX5tc5CEdBuDfDK2nyXat3gk5RCEDvPROanRVRs7Eg0Ie+Ck8exIxqEj5DeStEWc8zMcdRlBqZG1syz1Yd7w1Wh/gnTwikvNhpXcvN5Ezepl0xbJZ6zCgcydPXArDvFTrA3LgtdgwCEkyvWdXhgVTQ/Q0CAlJQZVqTpWTvRadPv4ggvqaepFyvN9QbkXqiMgI/nnP88Cu3tv/G7Eh46Zr4MiPpHwIDAQAB",
   "permissions": [

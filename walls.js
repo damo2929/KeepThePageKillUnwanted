@@ -835,11 +835,12 @@
     } catch (e) { report('tcfapi denial', e); }
   };
 
-  /* ---------- 4c. take out the ad boxes that can never fill ----------------
+  /* ---------- 4c. take out the empty ad boxes ------------------------------
    * Both answers this file gives an ad stack -- the consent "no" in 4b, and
-   * the refused AdShield loader -- leave Google's ad library (GPT) not
-   * running. The page still reserves room for every slot, and that room stays
-   * as white space above the masthead and between paragraphs:
+   * the refused AdShield loader -- leave the ad slots empty, and so does an
+   * ad request blocked at the resolver. The page still reserves room for
+   * every slot, and that room stays as white space above the masthead and
+   * between paragraphs:
    *
    *   Reach section page   .gpt.top-slot.ssr pinned to 261px by the site's CSS
    *   Reach article        a .sticky box pinned to 260px, and the masthead
@@ -850,6 +851,21 @@
    *   The Guardian         #dfp-ad--top-above-nav, 295px above the masthead
    *   Newsquest            #DFP_top_leaderboard, 250px under the menu
    *   Future plc           .dfp-leaderboard-container, 250px under the menu
+   *   Sky News             .ui-advert, 114px of grey inside a sticky region,
+   *                        so it rides down the page over the story
+   *   Al Jazeera           .container--ads-leaderboard-atf, 286px above the
+   *                        masthead, and three 300px .in-article-ads in the
+   *                        story: .ads > (span "Advertisement", .ads__slot)
+   *   The Independent      #billboard-wrapper, 250px above the masthead, and
+   *                        MPUs up to 450px in the story; gpt.js requested,
+   *                        `googletag.apiReady` never set
+   *
+   * The third case is not ours. Al Jazeera's Freestar stack waits on OneTrust,
+   * and with cdn.cookielaw.org blocked at the resolver OneTrust never loads,
+   * so GPT never starts and `googletag` is not even defined. A slot box is
+   * just as dead whoever stopped the ad stack, so with `walls` on every
+   * page's empty slots go: the user chose this over keeping 4c to pages the
+   * extension itself touched.
    *
    * Hiding is not enough for the second: the sibling rule still matches a
    * display:none box, so the masthead hangs 260px down over the headline.
@@ -863,34 +879,55 @@
    *   [class*="AdWrapper__AdDiv-"]            National World's ad component,
    *                                           by its name; the build hash
    *                                           after it is never matched
+   *   .ads__slot                              BEM "slot" element of an "ads"
+   *                                           block (Al Jazeera)
+   *   [data-role="advert-slot"]               Sky News's slot role
+   *   [data-ad-unit-path]                     the GPT ad unit path written on
+   *                                           the slot (The Independent)
    * From an empty one, climb while the parent holds no text and no media;
-   * stop at <body>, <main> and <article>, whatever they hold.
+   * stop at <body>, <main> and <article>, whatever they hold. A lone
+   * "Advertisement" label is not text for this purpose: it labels the empty
+   * box, and stopping at it left Al Jazeera's 286px band in place. Nor is
+   * the source of a <script>: Sky puts the slot's config script beside the
+   * slot, and its text stopped the climb one box short of the grey.
    *
-   * "Not running" is read from GPT itself, `googletag.apiReady`, never from
-   * the <script> tag: the Daily Record carries the tag and the request fails.
-   * Nothing is decided before the load event, since an async gpt.js already
-   * in the page holds that event back. Nothing negative is cached: every pass
-   * re-checks, and if GPT starts later each box goes back where it came from,
-   * unless the page has rebuilt that region since. */
+   * Whether Google's ad library (GPT) is running is not asked. It used to
+   * be, through `googletag.apiReady`, and the user asked for every empty
+   * placeholder gone instead: GPT can start and still fill nothing when the
+   * ad requests are blocked, and ads are blocked here. A slot that holds an
+   * ad is not blank, so it stays; one that fills after it has gone stays
+   * gone, which is the accepted cost. Nothing is decided before the load
+   * event, since an async gpt.js already in the page holds that event back.
+   * If the switches are turned off on an open page, each box goes back where
+   * it came from, unless the page has rebuilt that region since. */
   const SLOT_SEL = '[id^="div-gpt-ad-"], [id^="dfp-ad--"], [id^="DFP_"], ' +
                    '[class^="dfp-"], [class*=" dfp-"], ' +
-                   '[data-tmdatatrack-type="commercial"], [class*="AdWrapper__AdDiv-"]';
+                   '[data-tmdatatrack-type="commercial"], [class*="AdWrapper__AdDiv-"], ' +
+                   '.ads__slot, [data-role="advert-slot"], [data-ad-unit-path]';
   const FILLED = 'iframe,img,video,picture,svg,canvas,object,embed,input,button,textarea,select';
   const SLOT_STOP = /^(BODY|HTML|MAIN|ARTICLE)$/;
   const INVISIBLE = /[\s\u200b-\u200d\u2060\ufeff]/g;
   const slotsOut = [];
 
-  const blankBox = (el) =>
-    !el.querySelector(FILLED) && el.textContent.replace(INVISIBLE, '') === '';
+  const AD_LABEL = /^(advertisements?|adverts?|ads?)$/i;
 
-  const gptRunning = () => {
-    const g = window.googletag;
-    return !!(g && g.apiReady === true);
+  const NOT_TEXT = 'script,style,template';
+
+  const blankBox = (el) => {
+    if (el.querySelector(FILLED)) return false;
+    let text = el.textContent;
+    for (const n of el.querySelectorAll(NOT_TEXT)) text = text.replace(n.textContent, '');
+    text = text.replace(INVISIBLE, '');
+    return text === '' || AD_LABEL.test(text);
   };
 
   const slotsWanted = () =>
-    ((denialInstalled && active('consent')) || (wallPresent() && active('walls'))) &&
-    document.readyState === 'complete' && !gptRunning();
+    ((denialInstalled && active('consent')) || active('walls')) &&
+    document.readyState === 'complete';
+
+  /* Logged where the reason lives: consent when 4b's "no" stopped the ads,
+   * walls otherwise, so a dead stack nobody here touched still shows up. */
+  const slotChannel = () => (denialInstalled && active('consent') ? 'consent' : 'walls');
 
   const restoreSlots = () => {
     const n = slotsOut.length;
@@ -902,7 +939,7 @@
         parent.insertBefore(box, next);
       } catch (e) { /* the region has gone */ }
     }
-    log('consent', 'put back ' + n + ' ad slot box(es)');
+    log(slotChannel(), 'put back ' + n + ' ad slot box(es)');
   };
 
   const collapseSlots = () => {
@@ -919,7 +956,7 @@
         let p;
         while ((p = box.parentElement) && !SLOT_STOP.test(p.tagName) && blankBox(p)) box = p;
         slotsOut.push({ box, parent: box.parentNode, next: box.nextSibling });
-        log('consent', 'removed empty ad slot box <' + box.localName + '> for ' +
+        log(slotChannel(), 'removed empty ad slot box <' + box.localName + '> for ' +
             (slot.id ? '#' + slot.id : 'an unnamed slot'));
         dropNode(box);
       }

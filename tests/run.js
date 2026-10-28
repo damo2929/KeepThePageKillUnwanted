@@ -398,6 +398,8 @@ function slotDom(s, opts) {
     el.localName = tag;
     el.id = o.id || '';
     el.commercial = !!o.commercial;
+    el.role = o.role || '';
+    el.adPath = o.adPath || '';
     el.className = o.cls || '';
     el.kids = [];
     el.ownText = o.text || '';
@@ -422,6 +424,17 @@ function slotDom(s, opts) {
       const has = (e) => e.kids.some((k) => !k.__removed && (k.media || has(k)));
       return has(el) ? {} : null;
     };
+    el.querySelectorAll = (sel) => {
+      if (sel !== 'script,style,template') return [];
+      const out = [];
+      const walk = (e) => e.kids.forEach((k) => {
+        if (k.__removed) return;
+        if (/^(SCRIPT|STYLE|TEMPLATE)$/.test(k.tagName)) out.push(k);
+        walk(k);
+      });
+      walk(el);
+      return out;
+    };
     el.add = (...cs) => { for (const c of cs) { c.parentNode = c.parentElement = el; el.kids.push(c); } return el; };
     el.insertBefore = (c) => { c.__removed = false; (el.putBack = el.putBack || []).push(c); return c; };
     all.push(el);
@@ -433,18 +446,24 @@ function slotDom(s, opts) {
     if (sel === '[class*="block" i], [id*="block" i]') {
       return all.filter((e) => e.isConnected && /block/i.test(e.id + ' ' + e.className));
     }
-    if (/div-gpt-ad-|data-tmdatatrack-type|AdWrapper|dfp-/.test(sel)) {
+    if (/div-gpt-ad-|data-tmdatatrack-type|AdWrapper|dfp-|ads__slot|advert-slot|data-ad-unit-path/.test(sel)) {
       const gpt = sel.indexOf('[id^="div-gpt-ad-"]') !== -1;
       const dfp = sel.indexOf('[id^="dfp-ad--"]') !== -1;
       const nq = sel.indexOf('[id^="DFP_"]') !== -1;
       const dfpCls = sel.indexOf('[class^="dfp-"], [class*=" dfp-"]') !== -1;
       const reach = sel.indexOf('[data-tmdatatrack-type="commercial"]') !== -1;
       const nw = sel.indexOf('[class*="AdWrapper__AdDiv-"]') !== -1;
+      const bem = sel.indexOf('.ads__slot') !== -1;
+      const sky = sel.indexOf('[data-role="advert-slot"]') !== -1;
+      const unit = sel.indexOf('[data-ad-unit-path]') !== -1;
       return all.filter((e) => e.isConnected &&
         ((gpt && /^div-gpt-ad-/.test(e.id)) || (dfp && /^dfp-ad--/.test(e.id)) ||
          (nq && /^DFP_/.test(e.id)) || (dfpCls && /(^| )dfp-/.test(e.className)) ||
          (reach && e.commercial) ||
-         (nw && e.className.indexOf('AdWrapper__AdDiv-') !== -1)));
+         (nw && e.className.indexOf('AdWrapper__AdDiv-') !== -1) ||
+         (bem && /(^| )ads__slot( |$)/.test(e.className)) ||
+         (sky && e.role === 'advert-slot') ||
+         (unit && e.adPath !== '')));
     }
     if (/script/.test(sel)) return dom.scripts;
     return [];
@@ -479,12 +498,115 @@ function articlePage(s, opts) {
   return d;
 }
 
-test('a clean site keeps its empty ad slots', () => {
+test('ad walls switched off: a page we did not touch keeps its empty slots', () => {
+  const s = makeSandbox();
+  s.html.setAttribute('data-ktp-off', 'walls');
+  const d = sectionPage(s);
+  load(file('walls.js'), s);
+  s.tick();
+  eq(!!d.wrapper.__removed, false, 'removed with no consent denial and walls off');
+});
+
+test('a dead ad stack nobody here touched: the empty box still goes', () => {
+  /* Al Jazeera: OneTrust blocked at the resolver, so Freestar never starts and
+   * googletag is never defined. No __tcfapi, no wall signature. */
   const s = makeSandbox();
   const d = sectionPage(s);
   load(file('walls.js'), s);
   s.tick();
-  eq(!!d.wrapper.__removed, false, 'removed with no consent denial and no wall');
+  eq(!!d.wrapper.__removed, true, 'the dead slot box stayed');
+  eq(!!d.header.__removed, false, 'the masthead must stay');
+});
+
+test('Al Jazeera: .ads__slot climbs past its "Advertisement" label, not the page', () => {
+  /* .container--ads-leaderboard-atf (286px) > .ads > (span.ads__title, .ads__slot),
+   * then the header; and .container--ads.in-article-ads inside the story. */
+  const s = makeSandbox();
+  const d = slotDom(s);
+  const body = d.mk('body');
+  const ads = () => d.mk('div', { cls: 'ads' })
+    .add(d.mk('span', { cls: 'ads__title', text: ' Advertisement ' }), d.mk('div', { cls: 'ads__slot' }));
+  const top = d.mk('div', { cls: 'container--ads container--ads-leaderboard-atf' }).add(ads());
+  const header = d.mk('header', { text: 'News Explained Sport' });
+  const inline = d.mk('div', { cls: 'container--ads in-article-ads' }).add(ads());
+  const story = d.mk('div', { cls: 'wysiwyg' }).add(d.mk('p', { text: 'Gaza City' }), inline);
+  const root = d.mk('div', { cls: 'theme-style-rounded' }).add(top, header, story);
+  body.add(root);
+  load(file('walls.js'), s);
+  s.tick();
+  eq(!!top.__removed, true, 'the 286px band stayed');
+  eq(!!inline.__removed, true, 'the in-article box stayed');
+  eq(!!header.__removed, false, 'the masthead went');
+  eq(!!story.__removed, false, 'the story went');
+  eq(!!root.__removed, false, 'the page root went');
+});
+
+test('The Independent: a [data-ad-unit-path] billboard goes, the masthead stays', () => {
+  /* #frameInner > (#billboard-wrapper 250px > div > div[data-ad-unit-path]
+   * "/<network>/<site>/billboard", the page); gpt.js requested, never ready. */
+  const s = makeSandbox();
+  s.window.googletag = { cmd: [] };
+  const d = slotDom(s);
+  const body = d.mk('body');
+  const slot = d.mk('div', { adPath: '/1/site/billboard' });
+  const wrapper = d.mk('div', { id: 'billboard-wrapper' }).add(d.mk('div').add(slot));
+  const page = d.mk('div').add(d.mk('header', { text: 'UK Edition News Sport' }));
+  const frame = d.mk('div', { id: 'frameInner' }).add(wrapper, page);
+  body.add(frame);
+  load(file('walls.js'), s);
+  s.tick();
+  eq(!!wrapper.__removed, true, 'the 250px billboard band stayed');
+  eq(!!page.__removed, false, 'the page went');
+  eq(!!frame.__removed, false, 'climbed past the masthead');
+});
+
+test('Sky News: the grey unit goes past its config <script>, the sticky frame stays', () => {
+  /* .sticky-region > __target(sticky) > (iframe listener, .ui-advert >
+   * (script, #leaderboard[data-role=advert-slot])), consent denied. */
+  const s = makeSandbox();
+  s.window.__tcfapi = function () {};
+  const d = slotDom(s);
+  const body = d.mk('body');
+  const slot = d.mk('div', { id: 'leaderboard', role: 'advert-slot' });
+  const script = d.mk('script', { text: 'document.currentScript.parentNode.config = {}' });
+  const unit = d.mk('div', { cls: 'ui-advert sdc-site-au__leaderboard' }).add(script, slot);
+  const target = d.mk('div', { cls: 'sdc-site-layout-sticky-region__target' })
+    .add(d.mk('iframe', { media: true }), unit);
+  const region = d.mk('div', { cls: 'sdc-site-layout-sticky-region' }).add(target);
+  body.add(region, d.mk('main', { text: 'Microsoft offers buyouts' }));
+  load(file('walls.js'), s);
+  s.tick();
+  eq(!!unit.__removed, true, 'the 114px grey unit stayed');
+  eq(!!target.__removed, false, 'climbed past the listener frame');
+});
+
+test('script text alone never makes a box look filled, real text still does', () => {
+  const s = makeSandbox();
+  s.window.__tcfapi = function () {};
+  const d = slotDom(s);
+  const body = d.mk('body');
+  const box = d.mk('div').add(d.mk('style', { text: '.x{}' }), d.mk('div', { role: 'advert-slot' }));
+  const holder = d.mk('section').add(box, d.mk('script', { text: 'x()' }), d.mk('p', { text: 'Story' }));
+  body.add(holder);
+  load(file('walls.js'), s);
+  s.tick();
+  eq(!!box.__removed, true, 'a style block kept the empty box');
+  eq(!!holder.__removed, false, 'climbed past the story');
+});
+
+test('only a lone ad label counts as blank, not text that mentions ads', () => {
+  for (const text of ['Ads help keep this site free', 'Advertisement feature', 'Sponsored by Acme']) {
+    const s = makeSandbox();
+    const d = slotDom(s);
+    const body = d.mk('body');
+    const box = d.mk('div').add(d.mk('div', { cls: 'ads__slot' }));
+    const holder = d.mk('section').add(box, d.mk('span', { text }));
+    body.add(holder);
+    load(file('walls.js'), s);
+    s.tick();
+    eq(!!box.__removed, true, 'the empty box should go');
+    eq(!!holder.__removed, false, 'climbed past "' + text + '"');
+  }
 });
 
 test('consent denied: the box holding only the empty slot leaves the tree', () => {
@@ -552,26 +674,25 @@ test('the climb never takes <body>, <main> or <article>, even when blank', () =>
   }
 });
 
-test('GPT running: nothing is taken, and what was taken goes back', () => {
+test('GPT running: an empty box still goes, a filled one stays', () => {
+  /* Ads blocked at the resolver: GPT starts and fills nothing. */
   const s = makeSandbox();
-  s.window.__tcfapi = function () {};
   s.window.googletag = { cmd: [], apiReady: true };
   const d = sectionPage(s);
   load(file('walls.js'), s);
   s.tick();
-  eq(!!d.wrapper.__removed, false, 'removed with GPT running');
+  eq(!!d.wrapper.__removed, true, 'kept because GPT was running');
+  eq(!!d.header.__removed, false, 'the masthead must stay');
 
   const s2 = makeSandbox();
-  s2.window.__tcfapi = function () {};
-  s2.window.googletag = { cmd: [] };            /* the page's own stub */
-  const d2 = sectionPage(s2);
+  s2.window.googletag = { cmd: [], apiReady: true };
+  const d2 = slotDom(s2);
+  const body = d2.mk('body');
+  const box = d2.mk('div').add(d2.mk('div', { adPath: '/1/site/mpu1' }).add(d2.mk('iframe', { media: true })));
+  body.add(box, d2.mk('p', { text: 'Story' }));
   load(file('walls.js'), s2);
   s2.tick();
-  ok(d2.wrapper.__removed, 'a stub googletag is not GPT running');
-  s2.window.googletag.apiReady = true;
-  s2.tick();
-  eq(!!d2.wrapper.__removed, false, 'not put back once GPT started');
-  ok(d2.body.putBack && d2.body.putBack[0] === d2.wrapper, 'put back into the wrong parent');
+  eq(!!box.__removed, false, 'a slot holding an ad was taken');
 });
 
 test('a region the page rebuilt is not put back into', () => {
@@ -584,8 +705,13 @@ test('a region the page rebuilt is not put back into', () => {
   ok(d.wrapper.__removed, 'precondition: removed');
   d.body.kids.splice(d.body.kids.indexOf(d.header), 1);   /* the page moved it */
   d.header.parentNode = d.mk('div');
-  s.window.googletag.apiReady = true;
-  s.tick();
+  const realNow = Date.now;
+  try {
+    s.html.setAttribute('data-ktp-off', 'consent,walls');
+    const later = realNow() + 1000;
+    Date.now = () => later;
+    s.tick();
+  } finally { Date.now = realNow; }
   eq(!!(d.body.putBack && d.body.putBack.length), false, 'put back beside a node that has moved');
 });
 
@@ -683,7 +809,7 @@ test('a Reach commercial placeholder holding a zero-width character goes', () =>
   eq(!!story.__removed, false, 'the story went with it');
 });
 
-test('consent switched off on an open page: the boxes come back', () => {
+test('consent and ad walls switched off on an open page: the boxes come back', () => {
   /* active() re-reads the switch at most every 250ms, so the clock moves. */
   const s = makeSandbox();
   s.window.__tcfapi = function () {};
@@ -693,12 +819,12 @@ test('consent switched off on an open page: the boxes come back', () => {
   ok(d.wrapper.__removed, 'precondition: removed');
   const realNow = Date.now;
   try {
-    s.html.setAttribute('data-ktp-off', 'consent');
+    s.html.setAttribute('data-ktp-off', 'consent,walls');
     const later = realNow() + 1000;
     Date.now = () => later;
     s.tick();
   } finally { Date.now = realNow; }
-  eq(!!d.wrapper.__removed, false, 'still removed with consent off');
+  eq(!!d.wrapper.__removed, false, 'still removed with consent and walls off');
 });
 
 print('\ninline "turn off your ad blocker" notices');
